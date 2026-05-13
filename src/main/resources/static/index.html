@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>VRP Demo</title>
+    <meta charset="UTF-8">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css"/>
+    <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+    <style>#map { height: 90vh; }</style>
+</head>
+<body>
+<h3>Demo VRP - Click để thêm điểm, Depot đánh dấu đỏ</h3>
+Số xe: <input type="number" id="vehicles" value="2">
+<button onclick="solve()">Tối ưu</button>
+
+<div id="map"></div>
+
+<script>
+    const depotPos = [21.0285, 105.8542];
+    const map = L.map('map').setView(depotPos, 13);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
+
+    let points = [{ lat: depotPos[0], lng: depotPos[1] }];
+    let routeLayers = L.layerGroup().addTo(map); // Nhóm quản lý đường và marker thứ tự
+    const colors = ["#e74c3c", "#3498db", "#2ecc71", "#f1c40f", "#9b59b6", "#e67e22"];
+
+    // Vẽ Depot cố định ban đầu
+    L.circleMarker(depotPos, { radius: 10, color: 'red', fillOpacity: 1 }).addTo(map).bindPopup("KHO (DEPOT)");
+
+    map.on('click', function(e) {
+        let latlng = e.latlng;
+        L.marker([latlng.lat, latlng.lng]).addTo(map);
+        points.push({ lat: latlng.lat, lng: latlng.lng });
+    });
+
+    function solve() {
+        // Nếu chạy local mà HTML không nằm trong folder static của Spring Boot,
+        // hãy đổi URL thành: "http://localhost:8080/api/vrp/solve"
+        fetch("/api/vrp/solve", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                vehicles: parseInt(document.getElementById("vehicles").value),
+                locations: points
+            })
+        })
+        .then(res => res.json())
+        .then(routes => {
+            console.log("Kết quả từ Backend:", routes);
+            drawRoutes(routes);
+        })
+        .catch(err => {
+            console.error(err);
+            alert("Lỗi kết nối server. Hãy kiểm tra CORS hoặc Backend đã chạy chưa.");
+        });
+    }
+
+    function drawRoutes(routes) {
+        routeLayers.clearLayers(); // Xóa sạch các tuyến cũ trước khi vẽ mới
+
+        routes.forEach((route, vehicleIndex) => {
+            if (route.length < 2) return;
+
+            let latlngs = [];
+            route.forEach((pointIndex, order) => {
+                let pt = points[pointIndex];
+                latlngs.push([pt.lat, pt.lng]);
+
+                // Chỉ đánh số thứ tự cho các điểm giao (bỏ qua kho ở điểm đầu/cuối)
+                if (pointIndex !== 0) {
+                    L.circleMarker([pt.lat, pt.lng], {
+                        radius: 8,
+                        color: colors[vehicleIndex % colors.length],
+                        fillOpacity: 0.8
+                    }).addTo(routeLayers).bindPopup(`Xe ${vehicleIndex + 1} - Điểm dừng: ${order}`);
+                }
+            });
+
+            // Vẽ đường nối các điểm
+            L.polyline(latlngs, {
+                color: colors[vehicleIndex % colors.length],
+                weight: 5,
+                opacity: 0.7,
+                dashArray: '10, 10' // Tạo đường đứt nét cho đẹp
+            }).addTo(routeLayers);
+        });
+    }
+</script>
+</body>
+</html>
