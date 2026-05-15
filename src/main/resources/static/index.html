@@ -1,89 +1,740 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>VRP Demo</title>
+    <title>VRP Solver - Vehicle Routing Problem</title>
     <meta charset="UTF-8">
     <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css"/>
     <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
-    <style>#map { height: 90vh; }</style>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 10px;
+            background: #f5f5f5;
+        }
+        #container {
+            display: flex;
+            gap: 10px;
+            height: 90vh;
+        }
+        #panel {
+            width: 380px;
+            background: white;
+            border-radius: 5px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            padding: 15px;
+            overflow-y: auto;
+        }
+        #map {
+            flex: 1;
+            border-radius: 5px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        .section {
+            margin-bottom: 20px;
+            border-bottom: 1px solid #eee;
+            padding-bottom: 15px;
+        }
+        .section:last-child {
+            border-bottom: none;
+        }
+        h3 {
+            margin-top: 0;
+            color: #333;
+            font-size: 14px;
+            text-transform: uppercase;
+        }
+        .form-group {
+            margin-bottom: 8px;
+        }
+        label {
+            display: block;
+            font-size: 11px;
+            color: #666;
+            margin-bottom: 3px;
+            font-weight: bold;
+        }
+        input, select, button {
+            width: 100%;
+            padding: 6px;
+            margin-bottom: 6px;
+            border: 1px solid #ddd;
+            border-radius: 3px;
+            box-sizing: border-box;
+            font-size: 11px;
+        }
+        button {
+            background: #2196F3;
+            color: white;
+            border: none;
+            cursor: pointer;
+            font-weight: bold;
+            padding: 8px;
+        }
+        button:hover {
+            background: #1976D2;
+        }
+        button.danger {
+            background: #f44336;
+        }
+        button.danger:hover {
+            background: #da190b;
+        }
+        .vehicle-item, .delivery-item {
+            background: #f9f9f9;
+            padding: 8px;
+            margin-bottom: 8px;
+            border-radius: 3px;
+            border-left: 3px solid #2196F3;
+            font-size: 11px;
+        }
+        .vehicle-item {
+            border-left-color: #FF9800;
+        }
+        .delivery-item {
+            border-left-color: #4CAF50;
+        }
+        .route-result {
+            background: #e8f5e9;
+            padding: 10px;
+            margin-bottom: 10px;
+            border-radius: 3px;
+            border-left: 4px solid #4CAF50;
+        }
+        .route-header {
+            font-weight: bold;
+            color: #2e7d32;
+            margin-bottom: 5px;
+            font-size: 12px;
+        }
+        .route-detail {
+            font-size: 10px;
+            color: #555;
+            margin: 2px 0;
+        }
+        .route-cost {
+            font-size: 11px;
+            color: #d32f2f;
+            font-weight: bold;
+            margin-top: 5px;
+        }
+        .status {
+            padding: 10px;
+            border-radius: 3px;
+            margin-bottom: 10px;
+            font-size: 11px;
+            font-weight: bold;
+        }
+        .status.success {
+            background: #c8e6c9;
+            color: #1b5e20;
+        }
+        .status.error {
+            background: #ffcdd2;
+            color: #b71c1c;
+        }
+        .status.warning {
+            background: #fff3e0;
+            color: #e65100;
+        }
+        .remove-btn {
+            width: auto;
+            padding: 4px 8px;
+            font-size: 10px;
+            margin: 2px;
+            margin-left: 0;
+        }
+        .tabs {
+            display: flex;
+            gap: 5px;
+            margin-bottom: 10px;
+        }
+        .tab-btn {
+            flex: 1;
+            padding: 6px !important;
+            margin: 0 !important;
+            font-size: 11px;
+        }
+        .tab-btn.active {
+            background: #1976D2 !important;
+        }
+        .tab-content {
+            display: none;
+        }
+        .tab-content.active {
+            display: block;
+        }
+        .row {
+            display: flex;
+            gap: 10px;
+        }
+        .row .form-group {
+            flex: 1;
+        }
+        .summary {
+            background: #e3f2fd;
+            padding: 10px;
+            border-radius: 3px;
+            margin-bottom: 10px;
+            font-size: 11px;
+        }
+        .summary-item {
+            margin: 3px 0;
+            color: #1976D2;
+            font-weight: bold;
+        }
+    </style>
 </head>
 <body>
-<h3>Demo VRP - Click để thêm điểm, Depot đánh dấu đỏ</h3>
-Số xe: <input type="number" id="vehicles" value="2">
-<button onclick="solve()">Tối ưu</button>
 
-<div id="map"></div>
+<div id="container">
+    <div id="panel">
+        <h2 style="margin-top: 0; color: #1976D2; font-size: 16px;">🚚 VRP Solver</h2>
+        
+        <!-- Thông tin Depot -->
+        <div class="section">
+            <h3>📍 Kho Hàng (Depot)</h3>
+            <div class="row">
+                <div class="form-group">
+                    <label>Latitude:</label>
+                    <input type="number" id="depotLat" step="0.0001" value="21.0285" placeholder="Latitude">
+                </div>
+                <div class="form-group">
+                    <label>Longitude:</label>
+                    <input type="number" id="depotLng" step="0.0001" value="105.8542" placeholder="Longitude">
+                </div>
+            </div>
+        </div>
+
+        <!-- Tabs cho Xe và Đơn Hàng -->
+        <div class="tabs">
+            <button class="tab-btn active" onclick="switchTab('vehicles')">🚗 Xe</button>
+            <button class="tab-btn" onclick="switchTab('deliveries')">📦 Đơn Hàng</button>
+        </div>
+
+        <!-- Tab Xe -->
+        <div id="vehicles" class="tab-content active">
+            <div class="section">
+                <h3>Thêm Xe Giao Hàng</h3>
+                <div class="form-group">
+                    <label>Tên Xe:</label>
+                    <input type="text" id="vehicleName" placeholder="VD: Xe 01">
+                </div>
+                <div class="form-group">
+                    <label>Sức Chứa (kg):</label>
+                    <input type="number" id="vehicleCapacity" min="1" value="1000">
+                </div>
+                <div class="row">
+                    <div class="form-group">
+                        <label>Chi phí/km (VNĐ):</label>
+                        <input type="number" id="vehicleCostPerKm" min="0" value="5000" step="100">
+                    </div>
+                    <div class="form-group">
+                        <label>Chi phí cố định (VNĐ):</label>
+                        <input type="number" id="vehicleFixedCost" min="0" value="100000" step="10000">
+                    </div>
+                </div>
+                <button onclick="addVehicle()">+ Thêm Xe</button>
+                <div id="vehicleList"></div>
+            </div>
+        </div>
+
+        <!-- Tab Đơn Hàng -->
+        <div id="deliveries" class="tab-content">
+            <div class="section">
+                <h3>Thêm Đơn Hàng</h3>
+                <div class="form-group">
+                    <label>Trọng lượng (kg):</label>
+                    <input type="number" id="deliveryWeight" min="0.1" step="0.1" value="50">
+                </div>
+                <div class="row">
+                    <div class="form-group">
+                        <label>Từ (HH:mm):</label>
+                        <input type="time" id="deliveryTimeStart" value="09:00">
+                    </div>
+                    <div class="form-group">
+                        <label>Đến (HH:mm):</label>
+                        <input type="time" id="deliveryTimeEnd" value="17:00">
+                    </div>
+                </div>
+                <p style="font-size: 11px; color: #999; margin: 5px 0;">📌 Click bản đồ để thêm điểm, hoặc dùng nút dưới</p>
+                <button onclick="addDeliveryFromInput()">+ Thêm Đơn Hàng (từ Depot)</button>
+                <div id="deliveryList"></div>
+            </div>
+        </div>
+
+        <!-- Nút Giải Quyết -->
+        <div class="section">
+            <button onclick="solve()" style="background: #4CAF50; font-size: 12px; padding: 12px;">🚀 GIẢI QUYẾT VRP</button>
+            <button onclick="reset()" class="danger">🔄 Đặt Lại</button>
+        </div>
+
+        <!-- Kết Quả -->
+        <div class="section">
+            <div id="statusMessage"></div>
+            <div id="summaryResults"></div>
+            <div id="solutionResults"></div>
+        </div>
+    </div>
+
+    <div id="map"></div>
+</div>
 
 <script>
+    // ===== BIẾN TOÀN CỤC =====
     const depotPos = [21.0285, 105.8542];
     const map = L.map('map').setView(depotPos, 13);
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
 
-    let points = [{ lat: depotPos[0], lng: depotPos[1] }];
-    let routeLayers = L.layerGroup().addTo(map); // Nhóm quản lý đường và marker thứ tự
+    let vehicles = [];
+    let deliveries = [];
+    let routeLayers = L.layerGroup().addTo(map);
+    let depotMarker;
+    let deliveryMarkers = [];
+
     const colors = ["#e74c3c", "#3498db", "#2ecc71", "#f1c40f", "#9b59b6", "#e67e22"];
 
-    // Vẽ Depot cố định ban đầu
-    L.circleMarker(depotPos, { radius: 10, color: 'red', fillOpacity: 1 }).addTo(map).bindPopup("KHO (DEPOT)");
+    // ===== TAB SWITCHING =====
+    function switchTab(tab) {
+        document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
+        document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
+        document.getElementById(tab).classList.add('active');
+        event.target.classList.add('active');
+    }
+
+    // ===== KHỞI TẠO =====
+    function initDepot() {
+        updateDepot();
+        document.getElementById('depotLat').addEventListener('change', updateDepot);
+        document.getElementById('depotLng').addEventListener('change', updateDepot);
+    }
+
+    function updateDepot() {
+        const lat = parseFloat(document.getElementById('depotLat').value);
+        const lng = parseFloat(document.getElementById('depotLng').value);
+        
+        if (isNaN(lat) || isNaN(lng)) return;
+
+        if (depotMarker) map.removeLayer(depotMarker);
+        
+        depotMarker = L.circleMarker([lat, lng], {
+            radius: 12,
+            color: '#d32f2f',
+            fillColor: '#d32f2f',
+            fillOpacity: 1,
+            weight: 2
+        }).addTo(map).bindPopup("📍 KHO HÀNG", {permanent: false});
+    }
+
+    // ===== QUẢN LÝ XE =====
+    function addVehicle() {
+        const name = document.getElementById('vehicleName').value || 'Xe ' + (vehicles.length + 1);
+        const capacity = parseFloat(document.getElementById('vehicleCapacity').value);
+        const costPerKm = parseFloat(document.getElementById('vehicleCostPerKm').value);
+        const fixedCost = parseFloat(document.getElementById('vehicleFixedCost').value);
+
+        if (!capacity || capacity <= 0) {
+            alert('Nhập sức chứa > 0');
+            return;
+        }
+
+        vehicles.push({
+            id: vehicles.length,
+            name: name,
+            capacity: capacity,
+            costPerKm: costPerKm,
+            fixedCost: fixedCost,
+            timeWindowStart: 0,
+            timeWindowEnd: 24 * 60
+        });
+
+        updateVehicleList();
+        document.getElementById('vehicleName').value = '';
+        document.getElementById('vehicleCapacity').value = '1000';
+        document.getElementById('vehicleCostPerKm').value = '5000';
+        document.getElementById('vehicleFixedCost').value = '100000';
+    }
+
+    function updateVehicleList() {
+        const list = document.getElementById('vehicleList');
+        list.innerHTML = '';
+
+        vehicles.forEach((vehicle, idx) => {
+            const costInfo = `${vehicle.costPerKm.toLocaleString()} VNĐ/km + ${vehicle.fixedCost.toLocaleString()} VNĐ`;
+            const div = document.createElement('div');
+            div.className = 'vehicle-item';
+            div.innerHTML = `
+                <strong>${vehicle.name}</strong><br>
+                Sức chứa: ${vehicle.capacity} kg<br>
+                Chi phí: ${costInfo}
+                <button class="remove-btn danger" onclick="removeVehicle(${idx})">✕</button>
+            `;
+            list.appendChild(div);
+        });
+    }
+
+    function removeVehicle(idx) {
+        vehicles.splice(idx, 1);
+        updateVehicleList();
+    }
+
+    // ===== QUẢN LÝ ĐƠN HÀNG =====
+    function addDeliveryFromInput() {
+        const lat = parseFloat(document.getElementById('depotLat').value);
+        const lng = parseFloat(document.getElementById('depotLng').value);
+        const weight = parseFloat(document.getElementById('deliveryWeight').value);
+        const timeStart = document.getElementById('deliveryTimeStart').value;
+        const timeEnd = document.getElementById('deliveryTimeEnd').value;
+
+        if (!weight || weight <= 0) {
+            alert('Nhập trọng lượng > 0');
+            return;
+        }
+
+        const [startHour, startMin] = timeStart.split(':').map(Number);
+        const [endHour, endMin] = timeEnd.split(':').map(Number);
+        const timeWindowStart = startHour * 60 + startMin;
+        const timeWindowEnd = endHour * 60 + endMin;
+
+        if (timeWindowEnd <= timeWindowStart) {
+            alert('Khung giờ không hợp lệ: giờ kết thúc phải lớn hơn giờ bắt đầu. Nếu muốn giao qua đêm, cần tách thành khung giờ khác.');
+            return;
+        }
+
+        const deliveryId = deliveries.length;
+        deliveries.push({
+            id: deliveryId,
+            lat: lat,
+            lng: lng,
+            weight: weight,
+            address: `Đơn hàng ${deliveryId + 1}`,
+            timeWindowStart: timeWindowStart,
+            timeWindowEnd: timeWindowEnd,
+            serviceTime: 5
+        });
+
+        updateDeliveryList();
+    }
 
     map.on('click', function(e) {
-        let latlng = e.latlng;
-        L.marker([latlng.lat, latlng.lng]).addTo(map);
-        points.push({ lat: latlng.lat, lng: latlng.lng });
+        const weight = parseFloat(document.getElementById('deliveryWeight').value);
+        if (!weight || weight <= 0) {
+            alert('Nhập trọng lượng trước');
+            return;
+        }
+
+        const timeStart = document.getElementById('deliveryTimeStart').value;
+        const timeEnd = document.getElementById('deliveryTimeEnd').value;
+        const [startHour, startMin] = timeStart.split(':').map(Number);
+        const [endHour, endMin] = timeEnd.split(':').map(Number);
+        const timeWindowStart = startHour * 60 + startMin;
+        const timeWindowEnd = endHour * 60 + endMin;
+
+        if (timeWindowEnd <= timeWindowStart) {
+            alert('Khung giờ không hợp lệ: giờ kết thúc phải lớn hơn giờ bắt đầu. Nếu muốn giao qua đêm, cần tách thành khung giờ khác.');
+            return;
+        }
+
+        const latlng = e.latlng;
+        const deliveryId = deliveries.length;
+
+        deliveries.push({
+            id: deliveryId,
+            lat: latlng.lat,
+            lng: latlng.lng,
+            weight: weight,
+            address: `Đơn hàng ${deliveryId + 1}`,
+            timeWindowStart: timeWindowStart,
+            timeWindowEnd: timeWindowEnd,
+            serviceTime: 5
+        });
+
+        updateDeliveryList();
     });
 
+    function updateDeliveryList() {
+        clearDeliveryMarkers();
+        const list = document.getElementById('deliveryList');
+        list.innerHTML = '';
+
+        deliveries.forEach((delivery, idx) => {
+            const startTime = formatTimeDisplay(delivery.timeWindowStart);
+            const endTime = formatTimeDisplay(delivery.timeWindowEnd);
+            const div = document.createElement('div');
+            div.className = 'delivery-item';
+            div.innerHTML = `
+                <strong>📦 ${delivery.address}</strong><br>
+                Trọng lượng: ${delivery.weight} kg<br>
+                Khung giờ: ${startTime} - ${endTime}
+                <button class="remove-btn danger" onclick="removeDelivery(${idx})">✕</button>
+            `;
+            list.appendChild(div);
+        });
+
+        drawDeliveryMarkers();
+    }
+
+    function clearDeliveryMarkers() {
+        deliveryMarkers.forEach(marker => map.removeLayer(marker));
+        deliveryMarkers = [];
+    }
+
+    function drawDeliveryMarkers() {
+        deliveries.forEach((delivery, idx) => {
+            const marker = L.marker([delivery.lat, delivery.lng], {
+                icon: L.icon({
+                    iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-green.png',
+                    shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.7/images/marker-shadow.png',
+                    iconSize: [25, 41],
+                    iconAnchor: [12, 41],
+                    popupAnchor: [1, -34],
+                    shadowSize: [41, 41]
+                })
+            }).addTo(map).bindPopup(`📦 ${delivery.address}<br>${delivery.weight} kg`);
+            deliveryMarkers.push(marker);
+        });
+    }
+
+    function removeDelivery(idx) {
+        deliveries.splice(idx, 1);
+        updateDeliveryList();
+    }
+
+    function formatTime(minutes) {
+        const hours = Math.floor(minutes / 60);
+        const mins = minutes % 60;
+        return `${String(hours).padStart(2, '0')}:${String(mins).padStart(2, '0')}`;
+    }
+
+    function formatTimeDisplay(minutes) {
+        const totalMinutes = Number(minutes);
+        if (!Number.isFinite(totalMinutes)) {
+            return 'N/A';
+        }
+
+        const normalized = ((totalMinutes % 1440) + 1440) % 1440;
+        let hours = Math.floor(normalized / 60);
+        const mins = normalized % 60;
+        const period = hours >= 12 ? 'PM' : 'AM';
+        hours = hours % 12;
+        if (hours === 0) {
+            hours = 12;
+        }
+
+        return `${String(hours).padStart(2, '0')}:${String(mins).padStart(2, '0')} ${period}`;
+    }
+
+    function asNumber(value, fallback = 0) {
+        const parsed = Number(value);
+        return Number.isFinite(parsed) ? parsed : fallback;
+    }
+
+    function asFixed(value, digits = 2) {
+        return asNumber(value).toFixed(digits);
+    }
+
+    function buildRouteCoordinates(route, depotLat, depotLng) {
+        const routeCoords = [[depotLat, depotLng]];
+        (route?.deliveryIds ?? []).forEach(deliveryIdx => {
+            const delivery = deliveries[deliveryIdx];
+            if (delivery) {
+                routeCoords.push([delivery.lat, delivery.lng]);
+            }
+        });
+        routeCoords.push([depotLat, depotLng]);
+        return routeCoords;
+    }
+
+    async function fetchRoadGeometry(routeCoords) {
+        if (!Array.isArray(routeCoords) || routeCoords.length < 2) {
+            return null;
+        }
+
+        try {
+            const coordinateString = routeCoords
+                .map(([lat, lng]) => `${lng},${lat}`)
+                .join(';');
+            const url = `https://router.project-osrm.org/route/v1/driving/${coordinateString}?overview=full&geometries=geojson&steps=false`;
+            const response = await fetch(url);
+            if (!response.ok) {
+                return null;
+            }
+
+            const data = await response.json();
+            const roadRoute = data?.routes?.[0];
+            const coordinates = roadRoute?.geometry?.coordinates;
+
+            if (!Array.isArray(coordinates) || coordinates.length === 0) {
+                return null;
+            }
+
+            return coordinates.map(([lng, lat]) => [lat, lng]);
+        } catch (error) {
+            console.warn('Không lấy được đường đi thực tế từ OSRM, dùng đường thẳng thay thế.', error);
+            return null;
+        }
+    }
+
+    // ===== GIẢI QUYẾT VRP =====
     function solve() {
-        // Nếu chạy local mà HTML không nằm trong folder static của Spring Boot,
-        // hãy đổi URL thành: "http://localhost:8080/api/vrp/solve"
-        fetch("/api/vrp/solve", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-                vehicles: parseInt(document.getElementById("vehicles").value),
-                locations: points
-            })
+        if (vehicles.length === 0) {
+            showStatus('Thêm ít nhất 1 xe!', 'error');
+            return;
+        }
+        if (deliveries.length === 0) {
+            showStatus('Thêm ít nhất 1 đơn hàng!', 'error');
+            return;
+        }
+
+        const depotLat = parseFloat(document.getElementById('depotLat').value);
+        const depotLng = parseFloat(document.getElementById('depotLng').value);
+
+        const request = {
+            vehicles: vehicles,
+            deliveries: deliveries,
+            depotLat: depotLat,
+            depotLng: depotLng
+        };
+
+        console.log('Request:', request);
+
+        fetch('/api/vrp/solve', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(request)
         })
         .then(res => res.json())
-        .then(routes => {
-            console.log("Kết quả từ Backend:", routes);
-            drawRoutes(routes);
+        .then(solution => {
+            console.log('Solution:', solution);
+            displaySolution(solution);
+            drawSolution(solution);
         })
         .catch(err => {
             console.error(err);
-            alert("Lỗi kết nối server. Hãy kiểm tra CORS hoặc Backend đã chạy chưa.");
+            showStatus('❌ Lỗi: ' + err.message, 'error');
         });
     }
 
-    function drawRoutes(routes) {
-        routeLayers.clearLayers(); // Xóa sạch các tuyến cũ trước khi vẽ mới
+    function displaySolution(solution) {
+        const statusDiv = document.getElementById('statusMessage');
+        const summaryDiv = document.getElementById('summaryResults');
+        const resultsDiv = document.getElementById('solutionResults');
+        const routes = Array.isArray(solution?.routes) ? solution.routes : [];
+        const totalDistance = asNumber(solution?.totalDistance);
+        const totalCost = asNumber(solution?.totalCost);
+        const totalTime = asNumber(solution?.totalTime);
 
-        routes.forEach((route, vehicleIndex) => {
-            if (route.length < 2) return;
+        let statusClass = solution?.feasible ? 'success' : 'warning';
+        statusDiv.innerHTML = `<div class="status ${statusClass}">${solution?.message ?? 'Không có thông báo kết quả'}</div>`;
 
-            let latlngs = [];
-            route.forEach((pointIndex, order) => {
-                let pt = points[pointIndex];
-                latlngs.push([pt.lat, pt.lng]);
+        // Hiển thị tóm tắt
+        let summaryHtml = `
+            <div class="summary">
+                <div class="summary-item">📊 Tổng quãng đường: ${asFixed(totalDistance)} km</div>
+                <div class="summary-item">💰 Tổng chi phí: ${Math.round(totalCost).toLocaleString('vi-VN')} VNĐ</div>
+                <div class="summary-item">⏱️ Tổng thời gian: ${formatTimeDisplay(totalTime)}</div>
+                <div class="summary-item">📦 Tuyến đường: ${routes.length}</div>
+            </div>
+        `;
+        summaryDiv.innerHTML = summaryHtml;
 
-                // Chỉ đánh số thứ tự cho các điểm giao (bỏ qua kho ở điểm đầu/cuối)
-                if (pointIndex !== 0) {
-                    L.circleMarker([pt.lat, pt.lng], {
-                        radius: 8,
-                        color: colors[vehicleIndex % colors.length],
-                        fillOpacity: 0.8
-                    }).addTo(routeLayers).bindPopup(`Xe ${vehicleIndex + 1} - Điểm dừng: ${order}`);
+        // Hiển thị chi tiết từng tuyến
+        resultsDiv.innerHTML = '<h3>📋 CHI TIẾT TỪNG TUYẾN</h3>';
+
+        let html = '';
+        routes.forEach((route, idx) => {
+            const routeDistance = asNumber(route?.totalDistance);
+            const routeTime = asNumber(route?.totalTime);
+            const routeWeight = asNumber(route?.totalWeight);
+            const routeCapacity = asNumber(route?.capacity);
+            const routeCost = asNumber(route?.totalCost);
+            const utilization = routeCapacity > 0 ? ((routeWeight / routeCapacity) * 100).toFixed(1) : '0.0';
+            const utilizationColor = utilization > 90 ? '#d32f2f' : utilization > 70 ? '#ff9800' : '#4CAF50';
+
+            html += `
+                <div class="route-result">
+                    <div class="route-header">🚗 ${route?.vehicleName ?? `Xe ${idx + 1}`}</div>
+                    <div class="route-detail">Đơn hàng: ${(route?.deliveryIds ?? []).map(id => (id+1)).join(', ') || 'Không có'}</div>
+                    <div class="route-detail">Quãng đường: ${asFixed(routeDistance)} km</div>
+                    <div class="route-detail">Thời gian: ${formatTimeDisplay(routeTime)}</div>
+                    <div class="route-detail">Trọng lượng: ${asFixed(routeWeight)} / ${routeCapacity} kg
+                        (<span style="color: ${utilizationColor}; font-weight: bold;">${utilization}%</span>)</div>
+                    <div class="route-cost">💰 Chi phí: ${Math.round(routeCost).toLocaleString('vi-VN')} VNĐ</div>
+                </div>
+            `;
+        });
+
+        resultsDiv.innerHTML += html;
+    }
+
+    function drawSolution(solution) {
+        routeLayers.clearLayers();
+        const routes = Array.isArray(solution?.routes) ? solution.routes : [];
+        const routePromises = [];
+
+        routes.forEach((route, vehicleIdx) => {
+            const depotLat = parseFloat(document.getElementById('depotLat').value);
+            const depotLng = parseFloat(document.getElementById('depotLng').value);
+            const routeCoords = buildRouteCoordinates(route, depotLat, depotLng);
+
+            (route?.deliveryIds ?? []).forEach(deliveryIdx => {
+                const delivery = deliveries[deliveryIdx];
+                if (!delivery) {
+                    return;
                 }
+
+                L.circleMarker([delivery.lat, delivery.lng], {
+                    radius: 7,
+                    color: colors[vehicleIdx % colors.length],
+                    fillColor: colors[vehicleIdx % colors.length],
+                    fillOpacity: 0.8,
+                    weight: 2
+                }).addTo(routeLayers)
+                  .bindPopup(`<strong>${route?.vehicleName ?? `Xe ${vehicleIdx + 1}`}</strong><br>Điểm: ${deliveryIdx + 1}`);
             });
 
-            // Vẽ đường nối các điểm
-            L.polyline(latlngs, {
-                color: colors[vehicleIndex % colors.length],
-                weight: 5,
-                opacity: 0.7,
-                dashArray: '10, 10' // Tạo đường đứt nét cho đẹp
-            }).addTo(routeLayers);
+            const routePromise = fetchRoadGeometry(routeCoords).then(roadGeometry => {
+                const geometryToDraw = Array.isArray(roadGeometry) && roadGeometry.length > 1 ? roadGeometry : routeCoords;
+
+                L.polyline(geometryToDraw, {
+                    color: colors[vehicleIdx % colors.length],
+                    weight: 4,
+                    opacity: 0.85,
+                    lineJoin: 'round',
+                    lineCap: 'round'
+                }).addTo(routeLayers);
+            });
+
+            routePromises.push(routePromise);
+        });
+
+        Promise.all(routePromises).catch(err => {
+            console.warn('Có lỗi khi vẽ đường đi thực tế, fallback sang đường thẳng.', err);
         });
     }
+
+    function showStatus(message, type) {
+        const statusDiv = document.getElementById('statusMessage');
+        statusDiv.innerHTML = `<div class="status ${type}">${message}</div>`;
+    }
+
+    function reset() {
+        vehicles = [];
+        deliveries = [];
+        updateVehicleList();
+        updateDeliveryList();
+        document.getElementById('statusMessage').innerHTML = '';
+        document.getElementById('summaryResults').innerHTML = '';
+        document.getElementById('solutionResults').innerHTML = '';
+        routeLayers.clearLayers();
+        initDepot();
+    }
+
+    // ===== KHỞI ĐỘNG =====
+    initDepot();
+    updateVehicleList();
+    updateDeliveryList();
 </script>
+
 </body>
 </html>
