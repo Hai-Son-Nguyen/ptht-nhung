@@ -183,6 +183,20 @@
             color: #1976D2;
             font-weight: bold;
         }
+        .vehicle-panel {
+            background: #fff;
+            margin: 8px 0;
+            padding: 8px;
+            border-radius: 4px;
+            border-left: 4px solid #1976D2;
+            font-size: 12px;
+        }
+        .vehicle-controls { display: flex; gap: 6px; margin-top: 6px; }
+        .stop-list { margin-top: 8px; max-height: 140px; overflow: auto; }
+        .stop-item { padding: 6px; border-radius: 3px; margin-bottom: 4px; background: #f5f5f5; font-size: 11px; }
+        .stop-item.active { background: #1976D2; color: #fff; font-weight: bold; }
+        .steps-list { margin-top: 8px; max-height: 160px; overflow: auto; border-top: 1px dashed #eee; padding-top: 6px; }
+        .step-item { font-size: 11px; padding: 6px; border-radius: 3px; margin-bottom: 4px; background: #fafafa; }
     </style>
 </head>
 <body>
@@ -247,6 +261,11 @@
                     <label>Trọng lượng (kg):</label>
                     <input type="number" id="deliveryWeight" min="0.1" step="0.1" value="50">
                 </div>
+                <div class="form-group">
+                    <label>Địa chỉ:</label>
+                    <input type="text" id="deliveryAddress" placeholder="VD: Số 1 Hoàng Hoa Thám, Hà Nội">
+                    <button onclick="addDeliveryFromAddress()" style="margin-top:6px;">🔎 Tìm & Thêm theo địa chỉ</button>
+                </div>
                 <div class="row">
                     <div class="form-group">
                         <label>Từ (HH:mm):</label>
@@ -265,7 +284,7 @@
 
         <!-- Nút Giải Quyết -->
         <div class="section">
-            <button onclick="solve()" style="background: #4CAF50; font-size: 12px; padding: 12px;">🚀 GIẢI QUYẾT VRP</button>
+            <button id="solveBtn" onclick="solve()" style="background: #4CAF50; font-size: 12px; padding: 12px;">🚀 GIẢI QUYẾT VRP</button>
             <button onclick="reset()" class="danger">🔄 Đặt Lại</button>
         </div>
 
@@ -274,6 +293,7 @@
             <div id="statusMessage"></div>
             <div id="summaryResults"></div>
             <div id="solutionResults"></div>
+            <div id="vehicleTracking"></div>
         </div>
     </div>
 
@@ -500,6 +520,58 @@
         updateDeliveryList();
     }
 
+    // ===== GEOCODING (Nominatim) =====
+    async function geocodeAddress(address) {
+        if (!address || !address.trim()) return null;
+        try {
+            const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(address)}&limit=1`;
+            const res = await fetch(url, { headers: { 'Accept': 'application/json', 'User-Agent': 'VRP-Solver/1.0 (dev)' } });
+            if (!res.ok) return null;
+            const arr = await res.json();
+            if (!Array.isArray(arr) || arr.length === 0) return null;
+            return { lat: parseFloat(arr[0].lat), lng: parseFloat(arr[0].lon), display_name: arr[0].display_name };
+        } catch (e) {
+            console.warn('Geocode error', e);
+            return null;
+        }
+    }
+
+    async function addDeliveryFromAddress() {
+        const address = document.getElementById('deliveryAddress').value;
+        const weight = parseFloat(document.getElementById('deliveryWeight').value);
+        const timeStart = document.getElementById('deliveryTimeStart').value;
+        const timeEnd = document.getElementById('deliveryTimeEnd').value;
+
+        if (!weight || weight <= 0) { alert('Nhập trọng lượng > 0'); return; }
+
+        const [startHour, startMin] = timeStart.split(':').map(Number);
+        const [endHour, endMin] = timeEnd.split(':').map(Number);
+        const timeWindowStart = startHour * 60 + startMin;
+        const timeWindowEnd = endHour * 60 + endMin;
+
+        if (timeWindowEnd <= timeWindowStart) { alert('Khung giờ không hợp lệ'); return; }
+        if (!address || !address.trim()) { alert('Nhập địa chỉ để tìm kiếm'); return; }
+
+        showStatus('Đang tìm địa chỉ...', 'warning');
+        const result = await geocodeAddress(address);
+        if (!result) { showStatus('Không tìm thấy địa chỉ hoặc lỗi geocoding', 'error'); return; }
+
+        const deliveryId = deliveries.length;
+        deliveries.push({
+            id: deliveryId,
+            lat: result.lat,
+            lng: result.lng,
+            weight: weight,
+            address: result.display_name || address,
+            timeWindowStart: timeWindowStart,
+            timeWindowEnd: timeWindowEnd,
+            serviceTime: 5
+        });
+
+        showStatus('Đã thêm đơn hàng từ địa chỉ', 'success');
+        updateDeliveryList();
+    }
+
     function formatTime(minutes) {
         const hours = Math.floor(minutes / 60);
         const mins = minutes % 60;
@@ -577,12 +649,17 @@
 
     // ===== GIẢI QUYẾT VRP =====
     function solve() {
+        const solveBtn = document.getElementById('solveBtn');
+        if (solveBtn) { solveBtn.disabled = true; solveBtn.dataset.oldText = solveBtn.innerText; solveBtn.innerText = '⏳ Đang xử lý...'; }
+        showStatus('Đang giải quyết VRP, vui lòng chờ...', 'warning');
         if (vehicles.length === 0) {
             showStatus('Thêm ít nhất 1 xe!', 'error');
+            if (solveBtn) { solveBtn.disabled = false; solveBtn.innerText = solveBtn.dataset.oldText || '🚀 GIẢI QUYẾT VRP'; }
             return;
         }
         if (deliveries.length === 0) {
             showStatus('Thêm ít nhất 1 đơn hàng!', 'error');
+            if (solveBtn) { solveBtn.disabled = false; solveBtn.innerText = solveBtn.dataset.oldText || '🚀 GIẢI QUYẾT VRP'; }
             return;
         }
 
@@ -608,10 +685,12 @@
             console.log('Solution:', solution);
             displaySolution(solution);
             drawSolution(solution);
+            if (solveBtn) { solveBtn.disabled = false; solveBtn.innerText = solveBtn.dataset.oldText || '🚀 GIẢI QUYẾT VRP'; }
         })
         .catch(err => {
             console.error(err);
             showStatus('❌ Lỗi: ' + err.message, 'error');
+            if (solveBtn) { solveBtn.disabled = false; solveBtn.innerText = solveBtn.dataset.oldText || '🚀 GIẢI QUYẾT VRP'; }
         });
     }
 
@@ -669,6 +748,7 @@
 
     function drawSolution(solution) {
         routeLayers.clearLayers();
+        clearVehicleTracking();
         const routes = Array.isArray(solution?.routes) ? solution.routes : [];
         const routePromises = [];
 
@@ -693,17 +773,47 @@
                   .bindPopup(`<strong>${route?.vehicleName ?? `Xe ${vehicleIdx + 1}`}</strong><br>Điểm: ${deliveryIdx + 1}`);
             });
 
-            const routePromise = fetchRoadGeometry(routeCoords).then(roadGeometry => {
-                const geometryToDraw = Array.isArray(roadGeometry) && roadGeometry.length > 1 ? roadGeometry : routeCoords;
+            const routePromise = (async () => {
+                // Prefer geometry returned from backend if available
+                let geometryToDraw = null;
+                if (Array.isArray(route?.geometry) && route.geometry.length > 1) {
+                    geometryToDraw = route.geometry.map(p => [p.lat, p.lng]);
+                } else {
+                    const roadGeometry = await fetchRoadGeometry(routeCoords);
+                    geometryToDraw = Array.isArray(roadGeometry) && roadGeometry.length > 1 ? roadGeometry : routeCoords;
+                }
 
-                L.polyline(geometryToDraw, {
+                const poly = L.polyline(geometryToDraw, {
                     color: colors[vehicleIdx % colors.length],
                     weight: 4,
                     opacity: 0.85,
                     lineJoin: 'round',
                     lineCap: 'round'
                 }).addTo(routeLayers);
-            });
+
+                routePolylines[vehicleIdx] = poly;
+
+                const startPos = geometryToDraw[0];
+                const marker = L.circleMarker(startPos, {
+                    radius: 9,
+                    color: colors[vehicleIdx % colors.length],
+                    fillColor: colors[vehicleIdx % colors.length],
+                    fillOpacity: 1,
+                    weight: 2
+                }).addTo(routeLayers);
+
+                vehicleStates[vehicleIdx] = {
+                    polyline: poly,
+                    coords: geometryToDraw,
+                    stopPositions: routeCoords,
+                    marker: marker,
+                    currentIndex: 0,
+                    isPlaying: false,
+                    intervalId: null,
+                    route: route
+                };
+                createVehiclePanel(route, vehicleIdx);
+            })();
 
             routePromises.push(routePromise);
         });
@@ -716,6 +826,185 @@
     function showStatus(message, type) {
         const statusDiv = document.getElementById('statusMessage');
         statusDiv.innerHTML = `<div class="status ${type}">${message}</div>`;
+    }
+
+    // ===== VEHICLE TRACKING HELPERS =====
+    let routePolylines = [];
+    let vehicleStates = [];
+
+    function clearVehicleTracking() {
+        try {
+            vehicleStates.forEach(s => {
+                if (s.intervalId) clearInterval(s.intervalId);
+                if (s.marker) routeLayers.removeLayer(s.marker);
+                if (s.polyline) routeLayers.removeLayer(s.polyline);
+            });
+        } catch (e) { }
+        routePolylines = [];
+        vehicleStates = [];
+        const container = document.getElementById('vehicleTracking');
+        if (container) container.innerHTML = '';
+    }
+
+    function createVehiclePanel(route, vehicleIdx) {
+        const container = document.getElementById('vehicleTracking');
+        if (!container) return;
+
+        const panel = document.createElement('div');
+        panel.className = 'vehicle-panel';
+
+        const header = document.createElement('div');
+        header.className = 'route-header';
+        header.innerText = `🚗 ${route?.vehicleName ?? 'Xe ' + (vehicleIdx + 1)}`;
+
+        const controls = document.createElement('div');
+        controls.className = 'vehicle-controls';
+
+        const prevBtn = document.createElement('button');
+        prevBtn.innerText = '◀ Prev';
+        prevBtn.onclick = () => prevStep(vehicleIdx);
+
+        const playBtn = document.createElement('button');
+        playBtn.id = `playBtn-${vehicleIdx}`;
+        playBtn.innerText = '▶ Play';
+        playBtn.onclick = () => togglePlay(vehicleIdx);
+
+        const nextBtn = document.createElement('button');
+        nextBtn.innerText = 'Next ▶';
+        nextBtn.onclick = () => nextStep(vehicleIdx);
+
+        controls.appendChild(prevBtn);
+        controls.appendChild(playBtn);
+        controls.appendChild(nextBtn);
+
+        const stopList = document.createElement('div');
+        stopList.className = 'stop-list';
+
+        const stops = (vehicleStates[vehicleIdx]?.stopPositions ?? []).map((p, i) => {
+            if (i === 0) return {label: 'Depot', coord: p};
+            if (i === (vehicleStates[vehicleIdx]?.stopPositions.length - 1)) return {label: 'Depot', coord: p};
+            return {label: `Đơn hàng ${route?.deliveryIds?.[i-1] != null ? (route.deliveryIds[i-1]+1) : i}`, coord: p};
+        });
+
+        stops.forEach((s, i) => {
+            const div = document.createElement('div');
+            div.className = 'stop-item';
+            div.id = `v${vehicleIdx}-stop-${i}`;
+            div.innerText = `${i}. ${s.label}`;
+            div.onclick = () => stepTo(vehicleIdx, i);
+            stopList.appendChild(div);
+        });
+
+        panel.appendChild(header);
+        panel.appendChild(controls);
+        panel.appendChild(stopList);
+        // Steps (turn-by-turn) from backend
+        if (Array.isArray(route?.steps) && route.steps.length > 0) {
+            const stepsToggle = document.createElement('button');
+            stepsToggle.innerText = 'Hiển thị bước rẽ';
+            stepsToggle.style.marginTop = '6px';
+            let visible = false;
+            const stepsDiv = document.createElement('div');
+            stepsDiv.className = 'steps-list';
+            stepsDiv.style.display = 'none';
+            stepsToggle.onclick = () => {
+                visible = !visible;
+                stepsDiv.style.display = visible ? 'block' : 'none';
+                stepsToggle.innerText = visible ? 'Ẩn bước rẽ' : 'Hiển thị bước rẽ';
+            };
+
+            route.steps.forEach((st, si) => {
+                const sdiv = document.createElement('div');
+                sdiv.className = 'step-item';
+                const distKm = (st.distance/1000).toFixed(2);
+                const durMin = Math.round(st.duration/60);
+                sdiv.innerText = `${si+1}. ${st.instruction || ''} — ${distKm} km, ${durMin} min`;
+                stepsDiv.appendChild(sdiv);
+            });
+
+            panel.appendChild(stepsToggle);
+            panel.appendChild(stepsDiv);
+        }
+        container.appendChild(panel);
+
+        updateVehicleHighlight(vehicleIdx);
+    }
+
+    function stepTo(vehicleIdx, index) {
+        const state = vehicleStates[vehicleIdx];
+        if (!state) return;
+        const coords = state.coords || [];
+        const stops = state.stopPositions || [];
+
+        // Map stop index to nearest geometry index: simple proportional mapping
+        const geomIndex = Math.min(coords.length - 1, Math.floor((index / Math.max(1, stops.length - 1)) * (coords.length - 1)));
+        state.currentIndex = geomIndex;
+        if (state.marker && coords[geomIndex]) {
+            state.marker.setLatLng(coords[geomIndex]);
+            map.panTo(coords[geomIndex]);
+        }
+        updateVehicleHighlight(vehicleIdx);
+    }
+
+    function prevStep(vehicleIdx) {
+        const state = vehicleStates[vehicleIdx];
+        if (!state) return;
+        const stops = state.stopPositions || [];
+        const idx = Math.round((state.currentIndex / Math.max(1, state.coords.length - 1)) * Math.max(1, stops.length - 1));
+        stepTo(vehicleIdx, Math.max(0, idx - 1));
+    }
+    function nextStep(vehicleIdx) {
+        const state = vehicleStates[vehicleIdx];
+        if (!state) return;
+        const stops = state.stopPositions || [];
+        const idx = Math.round((state.currentIndex / Math.max(1, state.coords.length - 1)) * Math.max(1, stops.length - 1));
+        stepTo(vehicleIdx, Math.min((stops.length || 1) - 1, idx + 1));
+    }
+
+    function playVehicle(vehicleIdx) {
+        const state = vehicleStates[vehicleIdx];
+        if (!state || state.isPlaying) return;
+        state.isPlaying = true;
+        const playBtn = document.getElementById(`playBtn-${vehicleIdx}`);
+        if (playBtn) playBtn.innerText = '⏸ Pause';
+        state.intervalId = setInterval(() => {
+            if (!state.coords) return;
+            if (state.currentIndex >= state.coords.length - 1) {
+                pauseVehicle(vehicleIdx);
+                return;
+            }
+            state.currentIndex++;
+            state.marker.setLatLng(state.coords[state.currentIndex]);
+            map.panTo(state.coords[state.currentIndex]);
+            updateVehicleHighlight(vehicleIdx);
+        }, 600);
+    }
+
+    function pauseVehicle(vehicleIdx) {
+        const state = vehicleStates[vehicleIdx];
+        if (!state || !state.isPlaying) return;
+        state.isPlaying = false;
+        const playBtn = document.getElementById(`playBtn-${vehicleIdx}`);
+        if (playBtn) playBtn.innerText = '▶ Play';
+        if (state.intervalId) { clearInterval(state.intervalId); state.intervalId = null; }
+    }
+
+    function togglePlay(vehicleIdx) {
+        const state = vehicleStates[vehicleIdx];
+        if (!state) return;
+        if (state.isPlaying) pauseVehicle(vehicleIdx); else playVehicle(vehicleIdx);
+    }
+
+    function updateVehicleHighlight(vehicleIdx) {
+        const state = vehicleStates[vehicleIdx];
+        if (!state) return;
+        const stops = state.stopPositions || [];
+        const approxStopIndex = Math.round((state.currentIndex / Math.max(1, (state.coords.length - 1))) * Math.max(1, stops.length - 1));
+        for (let i = 0; i < stops.length; i++) {
+            const el = document.getElementById(`v${vehicleIdx}-stop-${i}`);
+            if (!el) continue;
+            if (i === approxStopIndex) el.classList.add('active'); else el.classList.remove('active');
+        }
     }
 
     function reset() {

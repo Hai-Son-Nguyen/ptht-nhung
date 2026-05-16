@@ -1,6 +1,9 @@
 package com.example.vrp.model;
 
 import java.util.List;
+import com.example.vrp.model.Location;
+import com.example.vrp.model.RouteStep;
+import java.util.ArrayList;
 
 /**
  * Kết quả tối ưu cho một tuyến đường (route) của một xe
@@ -17,8 +20,12 @@ public class Route {
     private double totalCost;        // Tổng chi phí (VNĐ)
     private double costPerKm;        // Chi phí per km
     private double fixedCost;        // Chi phí cố định
+    private List<Location> geometry;  // Geojson-like list of lat/lng for polyline
+    private List<RouteStep> steps;    // Turn-by-turn steps
 
     public Route() {
+        this.geometry = new ArrayList<>();
+        this.steps = new ArrayList<>();
     }
 
     public Route(int vehicleId, String vehicleName, List<Integer> deliveryIds, 
@@ -32,6 +39,8 @@ public class Route {
         this.utilizationRate = (totalWeight / capacity) * 100;
         this.totalTime = 0;
         this.totalCost = 0;
+        this.geometry = new ArrayList<>();
+        this.steps = new ArrayList<>();
     }
 
     public Route(int vehicleId, String vehicleName, List<Integer> deliveryIds, 
@@ -48,6 +57,8 @@ public class Route {
         this.costPerKm = costPerKm;
         this.fixedCost = fixedCost;
         this.totalCost = (totalDistance * costPerKm) + fixedCost;
+        this.geometry = new ArrayList<>();
+        this.steps = new ArrayList<>();
     }
 
     public int getVehicleId() {
@@ -136,5 +147,21 @@ public class Route {
 
     public void setFixedCost(double fixedCost) {
         this.fixedCost = fixedCost;
+    }
+
+    public List<Location> getGeometry() {
+        return geometry;
+    }
+
+    public void setGeometry(List<Location> geometry) {
+        this.geometry = geometry;
+    }
+
+    public List<RouteStep> getSteps() {
+        return steps;
+    }
+
+    public void setSteps(List<RouteStep> steps) {
+        this.steps = steps;
     }
 }

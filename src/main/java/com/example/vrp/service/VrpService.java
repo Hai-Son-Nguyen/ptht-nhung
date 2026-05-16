@@ -17,6 +17,10 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.util.*;
+import com.example.vrp.model.RouteStep;
+import com.example.vrp.model.Location;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 @Service
 public class VrpService {
@@ -25,6 +29,8 @@ public class VrpService {
     static {
         Loader.loadNativeLibraries();
     }
+
+    private static final Logger logger = LoggerFactory.getLogger(VrpService.class);
 
     private static final int SPEED_KM_PER_HOUR = 40; // Tốc độ trung bình 40 km/h
         private static final HttpClient HTTP_CLIENT = HttpClient.newBuilder()
@@ -123,9 +129,46 @@ public class VrpService {
         );
         RoutingDimension timeDimension = routing.getMutableDimension("Time");
 
-        // Add time window constraint
+        // Add time window constraint with validation and safe fallback to avoid OR-Tools failures
+        final long MAX_DAY_MINUTES = 24 * 60;
         for (int i = 0; i < numLocations; i++) {
-            timeDimension.cumulVar(manager.nodeToIndex(i)).setRange(timeWindowStarts[i], timeWindowEnds[i]);
+            int node = i;
+            long idx = manager.nodeToIndex(node);
+            long start = timeWindowStarts[i];
+            long end = timeWindowEnds[i];
+
+            if (start < 0) {
+                logger.warn("Time window start negative for node {}: {} -> clamped to 0", node, start);
+                start = 0;
+            }
+            if (end < 0) {
+                logger.warn("Time window end negative for node {}: {} -> clamped to 0", node, end);
+                end = 0;
+            }
+            if (start > MAX_DAY_MINUTES) {
+                logger.warn("Time window start exceeds day for node {}: {} -> clamped to {}", node, start, MAX_DAY_MINUTES);
+                start = MAX_DAY_MINUTES;
+            }
+            if (end > MAX_DAY_MINUTES) {
+                logger.warn("Time window end exceeds day for node {}: {} -> clamped to {}", node, end, MAX_DAY_MINUTES);
+                end = MAX_DAY_MINUTES;
+            }
+
+            if (end < start) {
+                // Nếu end < start, mở rộng end thêm serviceTime hoặc đặt bằng start
+                long fallbackEnd = Math.min(start + Math.max(1, serviceTimes[i]) + 60, MAX_DAY_MINUTES);
+                logger.warn("Time window end < start for node {}: start={} end={} -> adjusted end={}", node, start, end, fallbackEnd);
+                end = fallbackEnd;
+            }
+
+            try {
+                logger.debug("Setting time window for node {} (index {}) -> [{}, {}]", node, idx, start, end);
+                timeDimension.cumulVar(idx).setRange(start, end);
+            } catch (Exception ex) {
+                logger.error("Failed to set time window for node {} (index {}) with range [{}, {}]: {}. Applying wide fallback.", node, idx, start, end, ex.toString());
+                // Áp dụng fallback rộng để tránh crash OR-Tools
+                timeDimension.cumulVar(idx).setRange(0, MAX_DAY_MINUTES);
+            }
         }
 
         // 8. Thêm Capacity Dimension (ràng buộc tải trọng)
@@ -167,8 +210,8 @@ public class VrpService {
         Assignment solution = routing.solveWithParameters(searchParameters);
 
         // 11. Tổng hợp kết quả
-        return buildSolution(solution, routing, manager, vehicles, deliveries, 
-                           distanceMatrix, timeMatrix, deliveryWeights, serviceTimes);
+        return buildSolution(solution, routing, manager, vehicles, deliveries,
+            distanceMatrix, timeMatrix, deliveryWeights, serviceTimes, depotLat, depotLng);
     }
 
     /**
@@ -281,7 +324,7 @@ public class VrpService {
                                       RoutingIndexManager manager, List<Vehicle> vehicles,
                                       List<Delivery> deliveries, long[][] distanceMatrix,
                                       long[][] timeMatrix, long[] deliveryWeights,
-                                      long[] serviceTimes) {
+                                      long[] serviceTimes, double depotLat, double depotLng) {
         VrpSolution vrpSolution = new VrpSolution();
         List<Route> routes = new ArrayList<>();
 
@@ -309,6 +352,9 @@ public class VrpService {
             long routeWeight = 0;
 
             long index = routing.start(vehicleIdx);
+            // prepare route coordinates for directions
+            List<double[]> routeCoordsLatLng = new ArrayList<>();
+            routeCoordsLatLng.add(new double[]{depotLat, depotLng});
             while (!routing.isEnd(index)) {
                 int nodeIndex = manager.indexToNode(index);
                 
@@ -317,6 +363,9 @@ public class VrpService {
                     deliveryIds.add(deliveryIdx);
                     routeWeight += deliveryWeights[nodeIndex];
                     numDelivered++;
+                    // append delivery coords
+                    Delivery d = deliveries.get(deliveryIdx);
+                    routeCoordsLatLng.add(new double[]{d.getLat(), d.getLng()});
                 }
 
                 long nextIndex = solution.value(routing.nextVar(index));
@@ -325,6 +374,9 @@ public class VrpService {
                             serviceTimes[manager.indexToNode(nextIndex)];
                 index = nextIndex;
             }
+
+            // add depot at end
+            routeCoordsLatLng.add(new double[]{depotLat, depotLng});
 
             // Chỉ thêm route nếu xe có giao hàng
             if (!deliveryIds.isEmpty()) {
@@ -349,6 +401,29 @@ public class VrpService {
                 totalWeight += routeWeightKg;
                 totalCost += routeCost;
                 totalTime += routeTime;
+            }
+        }
+
+        // After building routes, fetch geometry and steps for each route from OSRM
+        for (int i = 0; i < routes.size(); i++) {
+            Route r = routes.get(i);
+            try {
+                // build coordinate string from depot + deliveries
+                List<double[]> coords = new ArrayList<>();
+                coords.add(new double[]{depotLat, depotLng});
+                for (Integer didx : r.getDeliveryIds()) {
+                    Delivery d = deliveries.get(didx);
+                    coords.add(new double[]{d.getLat(), d.getLng()});
+                }
+                coords.add(new double[]{depotLat, depotLng});
+
+                DirectionsResult dr = fetchRouteDirections(coords);
+                if (dr != null) {
+                    r.setGeometry(dr.geometry);
+                    r.setSteps(dr.steps);
+                }
+            } catch (Exception ex) {
+                logger.warn("Failed to fetch route directions for route {}: {}", i, ex.toString());
             }
         }
 
@@ -378,6 +453,77 @@ public class VrpService {
             this.distanceMatrix = distanceMatrix;
             this.timeMatrix = timeMatrix;
             this.source = source;
+        }
+    }
+
+    private static class DirectionsResult {
+        List<Location> geometry;
+        List<RouteStep> steps;
+
+        DirectionsResult(List<Location> geometry, List<RouteStep> steps) {
+            this.geometry = geometry;
+            this.steps = steps;
+        }
+    }
+
+    private DirectionsResult fetchRouteDirections(List<double[]> coordsLatLng) {
+        if (coordsLatLng == null || coordsLatLng.size() < 2) return null;
+        try {
+            StringBuilder coordStr = new StringBuilder();
+            for (int i = 0; i < coordsLatLng.size(); i++) {
+                double[] p = coordsLatLng.get(i);
+                if (i > 0) coordStr.append(';');
+                coordStr.append(p[1]).append(',').append(p[0]); // lng,lat
+            }
+
+            String url = "https://router.project-osrm.org/route/v1/driving/" + coordStr.toString() + "?overview=full&geometries=geojson&steps=true";
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(url))
+                    .timeout(Duration.ofSeconds(10))
+                    .GET()
+                    .build();
+
+            HttpResponse<String> response = HTTP_CLIENT.send(request, HttpResponse.BodyHandlers.ofString());
+            if (response.statusCode() < 200 || response.statusCode() >= 300) return null;
+
+            JsonNode root = OBJECT_MAPPER.readTree(response.body());
+            if (!"Ok".equalsIgnoreCase(root.path("code").asText())) return null;
+
+            JsonNode route = root.path("routes").path(0);
+            JsonNode geometry = route.path("geometry").path("coordinates");
+            List<Location> geom = new ArrayList<>();
+            if (geometry.isArray()) {
+                for (JsonNode coord : geometry) {
+                    double lng = coord.path(0).asDouble();
+                    double lat = coord.path(1).asDouble();
+                    geom.add(new Location(lat, lng));
+                }
+            }
+
+            List<RouteStep> steps = new ArrayList<>();
+            JsonNode legs = route.path("legs");
+            if (legs.isArray()) {
+                for (JsonNode leg : legs) {
+                    JsonNode sarr = leg.path("steps");
+                    if (sarr.isArray()) {
+                        for (JsonNode step : sarr) {
+                            String name = step.path("name").asText();
+                            JsonNode maneuver = step.path("maneuver");
+                            String type = maneuver.path("type").asText();
+                            String modifier = maneuver.path("modifier").asText();
+                            String instr = (type != null ? type : "") + (modifier != null && !modifier.isEmpty() ? " " + modifier : "") + (name != null && !name.isEmpty() ? " vào " + name : "");
+                            double dist = step.path("distance").asDouble(0.0);
+                            double dur = step.path("duration").asDouble(0.0);
+                            steps.add(new RouteStep(instr, dist, dur));
+                        }
+                    }
+                }
+            }
+
+            return new DirectionsResult(geom, steps);
+        } catch (Exception ex) {
+            logger.warn("Error fetching directions from OSRM: {}", ex.toString());
+            return null;
         }
     }
 }
