@@ -1,0 +1,67 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>VRP Compare: OSRM vs Haversine (Fake)</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <style>
+    html,body{height:100%;margin:0}
+    .container{display:flex;height:100vh}
+    #left,#right{flex:1;height:100%}
+    #left{border-right:4px solid #eee}
+    .title{position:absolute;z-index:6000;background:white;padding:6px 10px;font-weight:700}
+    .label-left{left:10px;top:10px}
+    .label-right{right:10px;top:10px}
+  </style>
+</head>
+<body>
+<div class="container">
+  <div id="left"></div>
+  <div id="right"></div>
+</div>
+<div class="title label-left">Offline / Haversine (straight)</div>
+<div class="title label-right">Online / OSRM (curved, fake)</div>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+// Embedded compact solution (from user file)
+const solution = {"summary":{"totalDistance":59.195,"totalCost":477404.3169,"totalTime":374,"feasible":true,"message":"✅ Tối ưu hóa thành công! Tất cả 50 đơn hàng đều được giao.","objectiveMode":"fuel","solverDurationMs":12443,"vehicleCount":5,"deliveryCount":50},"routes":[{"vehicleName":"Xe 1","deliveryIds":[8,15,43,29,44,1],"totalDistance":12.087,"totalTime":55,"totalWeight":470,"capacity":500,"totalCost":72522},{"vehicleName":"Xe 2","deliveryIds":[6,28,27,13,37,41,36,5],"totalDistance":11.518,"totalTime":66,"totalWeight":791,"capacity":800,"totalCost":63349.00000000001},{"vehicleName":"Xe 3","deliveryIds":[34,33,47,23,45,9,31,25,39,22,30],"totalDistance":11.229,"totalTime":77,"totalWeight":986,"capacity":1000,"totalCost":56144.99999999999},{"vehicleName":"Xe 4","deliveryIds":[46,19,3,14,12,32,7,21,42,48,20,18,10],"totalDistance":12.043,"totalTime":93,"totalWeight":1156,"capacity":1200,"totalCost":57806.399999999994},{"vehicleName":"Xe 5","deliveryIds":[24,40,26,16,49,0,38,2,11,35,17,4],"totalDistance":12.318,"totalTime":83,"totalWeight":1339,"capacity":1500,"totalCost":55431}]};
+const depot = [21.02,105.85];
+function haversine(a,b){ return Math.sqrt(Math.pow(a[0]-b[0],2)+Math.pow(a[1]-b[1],2)); }
+function interpolate(a,b,t){ return [a[0]+(b[0]-a[0])*t + 0.0005*Math.sin(t*Math.PI*2), a[1]+(b[1]-a[1])*t + 0.0003*Math.cos(t*2*Math.PI)]; }
+const left = L.map('left',{zoomControl:true}).setView(depot,14);
+const right = L.map('right',{zoomControl:true}).setView(depot,14);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:''}).addTo(left);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:''}).addTo(right);
+// draw depot marker
+L.circleMarker(depot,{radius:10,color:'#c0392b',fill:true,fillColor:'#e74c3c',fillOpacity:1}).addTo(left);
+L.circleMarker(depot,{radius:10,color:'#c0392b',fill:true,fillColor:'#e74c3c',fillOpacity:1}).addTo(right);
+// draw deliveries as small markers around map on both
+let colorIdx=0;
+const colors=['#1abc9c','#3498db','#9b59b6','#f39c12','#2ecc71','#e67e22','#e74c3c'];
+solution.routes.forEach(route=>{
+  const col = colors[(colorIdx++)%colors.length];
+  // build fake delivery coords deterministic from ids
+  const coords = route.deliveryIds.map(id=>[21.02 + ((id%7)-3)*0.003 + (id%2)*0.0008, 105.85 + ((id%5)-2)*0.003 + ((id+1)%2)*0.0005]);
+  // left: straight polylines between depot and each delivery sequentially
+  let last = depot;
+  const leftCoords=[depot];
+  coords.forEach(c=>{ leftCoords.push(c); last=c; });
+  leftCoords.push(depot);
+  L.polyline(leftCoords,{color:col,weight:3,opacity:0.9}).addTo(left);
+  // draw markers
+  coords.forEach(c=>L.circleMarker(c,{radius:6,fill:true,fillColor:col,color:'#fff',weight:1}).addTo(left));
+  // right: curved fake route
+  last = depot;
+  const rightCoords=[];
+  coords.forEach(dest=>{
+    for(let t=0;t<=10;t++) rightCoords.push(interpolate(last,dest,t/10));
+    last = dest;
+  });
+  for(let t=0;t<=10;t++) rightCoords.push(interpolate(last,depot,t/10));
+  L.polyline(rightCoords,{color:col,weight:4,opacity:0.85}).addTo(right);
+  coords.forEach(c=>L.circleMarker(c,{radius:6,fill:true,fillColor:col,color:'#fff',weight:1}).addTo(right));
+});
+</script>
+</body>
+</html>

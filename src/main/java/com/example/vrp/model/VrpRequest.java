@@ -11,6 +11,8 @@ public class VrpRequest {
     private List<Delivery> deliveries;   // Danh sách đơn hàng cần giao
     private double depotLat;             // Kho hàng (depot) - điểm xuất phát
     private double depotLng;
+    private String objectiveMode;        // fuel | distance
+    private Integer timeLimitSeconds;    // Giới hạn thời gian OR-Tools
 
     // Constructor không tham số
     public VrpRequest() {
@@ -22,6 +24,22 @@ public class VrpRequest {
         this.deliveries = deliveries;
         this.depotLat = depotLat;
         this.depotLng = depotLng;
+    }
+
+    public String getObjectiveMode() {
+        return objectiveMode;
+    }
+
+    public void setObjectiveMode(String objectiveMode) {
+        this.objectiveMode = objectiveMode;
+    }
+
+    public Integer getTimeLimitSeconds() {
+        return timeLimitSeconds;
+    }
+
+    public void setTimeLimitSeconds(Integer timeLimitSeconds) {
+        this.timeLimitSeconds = timeLimitSeconds;
     }
 
     public List<Vehicle> getVehicles() {

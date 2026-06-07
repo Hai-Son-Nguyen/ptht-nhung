@@ -18,7 +18,7 @@
             height: 90vh;
         }
         #panel {
-            width: 380px;
+            width: 340px;
             background: white;
             border-radius: 5px;
             box-shadow: 0 2px 10px rgba(0,0,0,0.1);
@@ -94,6 +94,7 @@
         .delivery-item {
             border-left-color: #4CAF50;
         }
+        .delivery-item.active { background: #fff9c4; border-left-color: #f57f17; }
         .route-result {
             background: #e8f5e9;
             padding: 10px;
@@ -197,6 +198,22 @@
         .stop-item.active { background: #1976D2; color: #fff; font-weight: bold; }
         .steps-list { margin-top: 8px; max-height: 160px; overflow: auto; border-top: 1px dashed #eee; padding-top: 6px; }
         .step-item { font-size: 11px; padding: 6px; border-radius: 3px; margin-bottom: 4px; background: #fafafa; }
+        /* Compact mode reduces paddings, sizes and list heights to minimize scrolling */
+        body.compact {
+            font-size: 12px;
+        }
+        body.compact #panel { width: 300px; padding: 8px; }
+        body.compact .vehicle-panel { margin: 6px 0; padding: 6px; font-size: 11px; }
+        body.compact .stop-list { max-height: 80px; }
+        body.compact .steps-list { max-height: 100px; }
+        body.compact .route-result { padding: 8px; }
+        /* Scrollable lists to save vertical space when many items exist */
+        #vehicleList, #deliveryList { max-height: 180px; overflow: auto; padding-right: 6px; }
+        #vehicleTracking { max-height: 240px; overflow: auto; }
+        #solutionResults { max-height: 220px; overflow: auto; }
+        body.compact #vehicleList, body.compact #deliveryList { max-height: 120px; }
+        body.compact #vehicleTracking { max-height: 160px; }
+        body.compact #solutionResults { max-height: 140px; }
     </style>
 </head>
 <body>
@@ -211,11 +228,11 @@
             <div class="row">
                 <div class="form-group">
                     <label>Latitude:</label>
-                    <input type="number" id="depotLat" step="0.0001" value="21.0285" placeholder="Latitude">
+                    <input type="number" id="depotLat" step="0.0001" value="21.02" placeholder="Latitude">
                 </div>
                 <div class="form-group">
                     <label>Longitude:</label>
-                    <input type="number" id="depotLng" step="0.0001" value="105.8542" placeholder="Longitude">
+                    <input type="number" id="depotLng" step="0.0001" value="105.85" placeholder="Longitude">
                 </div>
             </div>
         </div>
@@ -284,8 +301,37 @@
 
         <!-- Nút Giải Quyết -->
         <div class="section">
+            <div class="form-group">
+                <label>Tối ưu theo:</label>
+                <select id="objectiveMode">
+                    <option value="fuel" selected>Fuel-based (ưu tiên chi phí/nhiên liệu)</option>
+                    <option value="distance">Distance-based (ưu tiên quãng đường)</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label>Time limit (giây):</label>
+                <input type="number" id="timeLimitSeconds" min="1" max="120" value="10">
+            </div>
+            <div class="row" style="align-items:center; gap:8px;">
+                <div style="flex:1;">
+                    <label style="font-weight:normal; font-size:11px; display:block;">Kịch bản:</label>
+                    <select id="scenarioSelect" style="width:100%; margin-top:6px;">
+                        <option value="sample">Sample (20 đơn, 3 xe)</option>
+                        <option value="s2">Kịch bản 2 (50 đơn, 5 xe)</option>
+                        <option value="s3">Kịch bản 3 (100 đơn, 15 xe)</option>
+                    </select>
+                </div>
+                <div style="width:120px; display:flex; gap:6px; flex-direction:column;">
+                    <button onclick="loadSelectedScenario()" style="width:100%;">Nạp kịch bản</button>
+                    <label style="font-weight:normal; font-size:11px;"><input type="checkbox" id="compactViewCheckbox"> Compact view</label>
+                </div>
+            </div>
             <button id="solveBtn" onclick="solve()" style="background: #4CAF50; font-size: 12px; padding: 12px;">🚀 GIẢI QUYẾT VRP</button>
             <button onclick="reset()" class="danger">🔄 Đặt Lại</button>
+            <div style="display:flex; gap:8px; align-items:center; margin-top:6px;">
+                <button id="exportBtn" onclick="exportCurrentSolution()" style="flex:1; background:#455a64;">⬇️ Xuất kết quả</button>
+            </div>
+            <!-- Use the scenario selector above to load scenarios -->
         </div>
 
         <!-- Kết Quả -->
@@ -303,7 +349,7 @@
 <script>
     // ===== BIẾN TOÀN CỤC =====
     const depotPos = [21.0285, 105.8542];
-    const map = L.map('map').setView(depotPos, 13);
+    const map = L.map('map', { preferCanvas: true }).setView(depotPos, 13);
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
 
     let vehicles = [];
@@ -320,6 +366,19 @@
         document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
         document.getElementById(tab).classList.add('active');
         event.target.classList.add('active');
+    }
+
+    function getSelectedObjectiveMode() {
+        const select = document.getElementById('objectiveMode');
+        const mode = select ? select.value : 'fuel';
+        return mode === 'distance' ? 'distance' : 'fuel';
+    }
+
+    function getRequestedTimeLimitSeconds(defaultValue = 10) {
+        const input = document.getElementById('timeLimitSeconds');
+        const parsed = Number(input?.value ?? defaultValue);
+        if (!Number.isFinite(parsed) || parsed <= 0) return defaultValue;
+        return Math.min(Math.max(Math.round(parsed), 1), 120);
     }
 
     // ===== KHỞI TẠO =====
@@ -472,6 +531,15 @@
         updateDeliveryList();
     });
 
+    // Double-click on map to set depot coordinates
+    map.on('dblclick', function(e) {
+        const latlng = e.latlng;
+        document.getElementById('depotLat').value = latlng.lat.toFixed(6);
+        document.getElementById('depotLng').value = latlng.lng.toFixed(6);
+        updateDepot();
+        showStatus('Depot được cập nhật từ bản đồ.', 'success');
+    });
+
     function updateDeliveryList() {
         clearDeliveryMarkers();
         const list = document.getElementById('deliveryList');
@@ -482,6 +550,8 @@
             const endTime = formatTimeDisplay(delivery.timeWindowEnd);
             const div = document.createElement('div');
             div.className = 'delivery-item';
+            div.id = `delivery-item-${idx}`;
+            div.onclick = () => highlightDelivery(idx);
             div.innerHTML = `
                 <strong>📦 ${delivery.address}</strong><br>
                 Trọng lượng: ${delivery.weight} kg<br>
@@ -513,6 +583,19 @@
             }).addTo(map).bindPopup(`📦 ${delivery.address}<br>${delivery.weight} kg`);
             deliveryMarkers.push(marker);
         });
+    }
+
+    function highlightDelivery(idx) {
+        // open popup and pan to delivery marker, and highlight in list
+        if (!deliveryMarkers[idx]) return;
+        const m = deliveryMarkers[idx];
+        map.panTo(m.getLatLng());
+        m.openPopup();
+
+        // clear previous highlights
+        document.querySelectorAll('.delivery-item.active').forEach(el => el.classList.remove('active'));
+        const el = document.getElementById(`delivery-item-${idx}`);
+        if (el) el.classList.add('active');
     }
 
     function removeDelivery(idx) {
@@ -648,7 +731,7 @@
     }
 
     // ===== GIẢI QUYẾT VRP =====
-    function solve() {
+    async function solve() {
         const solveBtn = document.getElementById('solveBtn');
         if (solveBtn) { solveBtn.disabled = true; solveBtn.dataset.oldText = solveBtn.innerText; solveBtn.innerText = '⏳ Đang xử lý...'; }
         showStatus('Đang giải quyết VRP, vui lòng chờ...', 'warning');
@@ -670,29 +753,295 @@
             vehicles: vehicles,
             deliveries: deliveries,
             depotLat: depotLat,
-            depotLng: depotLng
+            depotLng: depotLng,
+            objectiveMode: getSelectedObjectiveMode(),
+            timeLimitSeconds: getRequestedTimeLimitSeconds()
         };
 
         console.log('Request:', request);
 
-        fetch('/api/vrp/solve', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify(request)
-        })
-        .then(res => res.json())
-        .then(solution => {
+        try {
+            const { solution, durationMs } = await sendSolveRequest(request);
             console.log('Solution:', solution);
+            // attach duration for display
+            solution._solverDurationMs = durationMs;
+            solution._objectiveMode = request.objectiveMode;
             displaySolution(solution);
             drawSolution(solution);
-            if (solveBtn) { solveBtn.disabled = false; solveBtn.innerText = solveBtn.dataset.oldText || '🚀 GIẢI QUYẾT VRP'; }
-        })
-        .catch(err => {
+            // store last solution for export and enable export button
+            window.lastSolution = solution;
+            const exportBtn = document.getElementById('exportBtn'); if (exportBtn) exportBtn.disabled = false;
+        } catch (err) {
             console.error(err);
             showStatus('❌ Lỗi: ' + err.message, 'error');
+        } finally {
             if (solveBtn) { solveBtn.disabled = false; solveBtn.innerText = solveBtn.dataset.oldText || '🚀 GIẢI QUYẾT VRP'; }
-        });
+        }
     }
+
+    // ===== AUTO GENERATE SAMPLE & SOLVE =====
+    function autoGenerateAndSolve(numDeliveries = 20, numVehicles = 3) {
+        reset();
+        showStatus('Tạo kịch bản mẫu...', 'warning');
+        const depotLat = parseFloat(document.getElementById('depotLat').value) || depotPos[0];
+        const depotLng = parseFloat(document.getElementById('depotLng').value) || depotPos[1];
+
+        // create vehicles
+        for (let i = 0; i < numVehicles; i++) {
+            vehicles.push({
+                id: i,
+                name: `Xe ${i + 1}`,
+                capacity: 500,
+                costPerKm: 0,
+                fixedCost: 0,
+                timeWindowStart: 0,
+                timeWindowEnd: 24 * 60
+            });
+        }
+
+        // create deliveries around depot within ~1.5km
+        for (let i = 0; i < numDeliveries; i++) {
+            const dx = (Math.random() - 0.5) * 0.03; // ~±3km longitude
+            const dy = (Math.random() - 0.5) * 0.02; // ~±2km latitude
+            const lat = depotLat + dy;
+            const lng = depotLng + dx;
+            const weight = Math.round(10 + Math.random() * 80);
+            deliveries.push({
+                id: i,
+                lat: lat,
+                lng: lng,
+                weight: weight,
+                address: `Auto ${i + 1}`,
+                timeWindowStart: 8 * 60,
+                timeWindowEnd: 18 * 60,
+                serviceTime: 5
+            });
+        }
+
+        updateVehicleList();
+        updateDeliveryList();
+        map.setView([depotLat, depotLng], 13);
+
+        // kịch bản chỉ nạp dữ liệu, không tự gọi solver
+        showStatus('Kịch bản đã nạp. Ấn "GIẢI QUYẾT VRP" để chạy thuật toán.', 'success');
+    }
+
+        // Helper to POST a solve request and return {solution, durationMs}
+        async function sendSolveRequest(request) {
+            const start = performance.now();
+            const res = await fetch('/api/vrp/solve', {
+                method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(request)
+            });
+            const duration = Math.round(performance.now() - start);
+            if (!res.ok) {
+                const txt = await res.text();
+                throw new Error(`Server returned ${res.status}: ${txt}`);
+            }
+            const json = await res.json();
+            return { solution: json, durationMs: duration };
+        }
+
+        // ===== SCENARIO 2: Medium-scale comparison (50 deliveries, 5 vehicles) =====
+        async function autoScenario2AndCompare() {
+            window.stressMode = false;
+            reset();
+            showStatus('Tạo kịch bản 2 (50 đơn, 5 xe)...', 'warning');
+            const depotLat = parseFloat(document.getElementById('depotLat').value) || depotPos[0];
+            const depotLng = parseFloat(document.getElementById('depotLng').value) || depotPos[1];
+
+            // vehicle capacities and fuel cost per km (lower cost favors assignment)
+            const caps = [500, 800, 1000, 1200, 1500];
+            const fuelCosts = [6000, 5500, 5000, 4800, 4500];
+
+            for (let i = 0; i < caps.length; i++) {
+                vehicles.push({
+                    id: i,
+                    name: `Xe ${i + 1}`,
+                    capacity: caps[i],
+                    costPerKm: fuelCosts[i],
+                    fixedCost: 0,
+                    timeWindowStart: 0,
+                    timeWindowEnd: 24 * 60
+                });
+            }
+
+            // create 50 deliveries with skewed weight distribution (some heavy)
+            const N = 50;
+            // first generate raw weights then scale to fit total vehicle capacity (safety margin 95%)
+            const rawWeights = [];
+            for (let i = 0; i < N; i++) {
+                // 30% heavy, 70% normal
+                let w = 0;
+                if (Math.random() < 0.30) w = Math.round(100 + Math.random() * 200); // 100-300kg
+                else w = Math.round(5 + Math.random() * 95); // 5-100kg
+                rawWeights.push(w);
+            }
+
+            const totalVehicleCapacityKg = caps.reduce((s, c) => s + c, 0);
+            const sumRaw = rawWeights.reduce((s, w) => s + w, 0);
+            const safetyRatio = 0.95; // keep total demand <= 95% of capacity
+            const scale = sumRaw > 0 ? Math.min(1, (totalVehicleCapacityKg * safetyRatio) / sumRaw) : 1;
+
+            if (scale < 1) {
+                showStatus('Điều chỉnh trọng lượng đơn hàng để không vượt tổng sức chứa đội xe (tỉ lệ ' + (Math.round(scale*100)) + '%).', 'warning');
+            }
+
+            for (let i = 0; i < N; i++) {
+                const dx = (Math.random() - 0.5) * 0.04;
+                const dy = (Math.random() - 0.5) * 0.03;
+                const lat = depotLat + dy;
+                const lng = depotLng + dx;
+                const weight = Math.max(1, Math.round(rawWeights[i] * scale));
+
+                deliveries.push({
+                    id: i,
+                    lat: lat,
+                    lng: lng,
+                    weight: weight,
+                    address: `S2-${i + 1}`,
+                    timeWindowStart: 8 * 60,
+                    timeWindowEnd: 18 * 60,
+                    serviceTime: 5
+                });
+            }
+
+            updateVehicleList();
+            updateDeliveryList();
+            map.setView([depotLat, depotLng], 13);
+
+            // chỉ nạp kịch bản 2 (dữ liệu), không chạy solver tự động
+            showStatus('Kịch bản 2 đã nạp. Ấn "GIẢI QUYẾT VRP" để chạy thuật toán hoặc dùng chức năng so sánh thủ công.', 'success');
+        }
+
+        function showComparisonResults(solDist, solFuel) {
+            const summaryDiv = document.getElementById('summaryResults');
+            const resultsDiv = document.getElementById('solutionResults');
+            // prepare side-by-side summary
+            const distSummary = `🔵 Distance-based: ${asFixed(solDist?.totalDistance)} km — ${Math.round(asNumber(solDist?.totalCost)).toLocaleString('vi-VN')} VNĐ — ⏱ ${solDist?._solverDurationMs ?? 'n/a'} ms`;
+            const fuelSummary = `🟣 Fuel-based: ${asFixed(solFuel?.totalDistance)} km — ${Math.round(asNumber(solFuel?.totalCost)).toLocaleString('vi-VN')} VNĐ — ⏱ ${solFuel?._solverDurationMs ?? 'n/a'} ms`;
+
+            summaryDiv.innerHTML = `
+                <div class="summary">
+                    <div class="summary-item">${distSummary}</div>
+                    <div class="summary-item">${fuelSummary}</div>
+                    <div style="margin-top:6px; display:flex; gap:6px;">
+                        <button onclick="displayCompare('distance')">Hiện Distance-based</button>
+                        <button onclick="displayCompare('fuel')">Hiện Fuel-based</button>
+                    </div>
+                </div>
+            `;
+
+            resultsDiv.innerHTML = `<h3>🔎 So sánh chi tiết</h3>
+                <div style="font-size:11px; color:#333;">Số tuyến (distance): ${solDist?.routes?.length ?? 0} — Số tuyến (fuel): ${solFuel?.routes?.length ?? 0}</div>`;
+        }
+
+        function displayCompare(mode) {
+            const sol = window.compareSolutions?.[mode];
+            if (!sol) { showStatus('Không có dữ liệu so sánh cho ' + mode, 'error'); return; }
+            displaySolution(sol);
+            drawSolution(sol);
+        }
+
+        function autoScenario3StressTest() {
+            window.stressMode = true;
+            reset();
+            showStatus('Tạo kịch bản 3 (100 đơn, 15 xe) để stress test...', 'warning');
+            const depotLat = parseFloat(document.getElementById('depotLat').value) || depotPos[0];
+            const depotLng = parseFloat(document.getElementById('depotLng').value) || depotPos[1];
+
+            const capacities = [500, 600, 700, 800, 900, 1000, 1100, 1200, 1300, 1400, 1500, 1500, 1200, 1000, 800];
+            const fuelCosts = [6500, 6200, 6100, 6000, 5800, 5600, 5400, 5200, 5000, 4900, 4700, 4600, 4500, 4400, 4300];
+
+            for (let i = 0; i < 15; i++) {
+                vehicles.push({
+                    id: i,
+                    name: `Xe ${i + 1}`,
+                    capacity: capacities[i],
+                    costPerKm: fuelCosts[i],
+                    fixedCost: 0,
+                    timeWindowStart: 0,
+                    timeWindowEnd: 24 * 60
+                });
+            }
+
+            const count = 100;
+            for (let i = 0; i < count; i++) {
+                const ring = i % 5;
+                const angle = (i / count) * Math.PI * 2;
+                const radiusLat = 0.01 + ring * 0.004;
+                const radiusLng = 0.015 + ring * 0.005;
+                const lat = depotLat + Math.sin(angle) * radiusLat + (Math.random() - 0.5) * 0.002;
+                const lng = depotLng + Math.cos(angle) * radiusLng + (Math.random() - 0.5) * 0.002;
+                const weight = i % 9 === 0 ? Math.round(120 + Math.random() * 180) : Math.round(8 + Math.random() * 95);
+
+                deliveries.push({
+                    id: i,
+                    lat: lat,
+                    lng: lng,
+                    weight: weight,
+                    address: `S3-${i + 1}`,
+                    timeWindowStart: 7 * 60,
+                    timeWindowEnd: 19 * 60,
+                    serviceTime: 5
+                });
+            }
+
+            updateVehicleList();
+            updateDeliveryList();
+            map.setView([depotLat, depotLng], 12);
+
+            const request = {
+                vehicles: vehicles.map(v => ({...v})),
+                deliveries: deliveries.map(d => ({...d})),
+                depotLat: depotLat,
+                depotLng: depotLng,
+                objectiveMode: getSelectedObjectiveMode(),
+                timeLimitSeconds: 60
+            };
+
+            // chỉ nạp kịch bản 3 (dữ liệu), không chạy solver tự động
+            showStatus('Kịch bản 3 đã nạp (100 đơn, 15 xe). Ấn "GIẢI QUYẾT VRP" để chạy.', 'success');
+        }
+
+    // Toggle compact view (reduces paddings and heights)
+    function toggleCompact(enabled) {
+        if (enabled) document.body.classList.add('compact'); else document.body.classList.remove('compact');
+    }
+
+        // Show only a single vehicle's route (dim others)
+        function showOnlyVehicle(idx) {
+            vehicleStates.forEach((s, i) => {
+                if (!s) return;
+                try {
+                    if (i === idx) {
+                        s.polyline.setStyle({opacity: 1, weight: 5});
+                        if (s.marker) s.marker.setStyle({opacity: 1, fillOpacity: 1});
+                    } else {
+                        s.polyline.setStyle({opacity: 0.08, weight: 3});
+                        if (s.marker) s.marker.setStyle({opacity: 0.2, fillOpacity: 0.2});
+                    }
+                } catch (e) { }
+            });
+            // mark solo button active (clear others)
+            document.querySelectorAll('[id^="soloBtn-"]').forEach(b => b.dataset.active = '0');
+            const btn = document.getElementById(`soloBtn-${idx}`);
+            if (btn) btn.dataset.active = '1';
+            // dim other vehicle panels
+            document.querySelectorAll('.vehicle-panel').forEach((p, i) => { if (i!==idx) p.style.opacity = '0.35'; else p.style.opacity = '1'; });
+        }
+
+        function showAllVehicles() {
+            vehicleStates.forEach((s, i) => {
+                if (!s) return;
+                try {
+                    s.polyline.setStyle({opacity: 0.85, weight: 4});
+                    if (s.marker) s.marker.setStyle({opacity: 1, fillOpacity: 1});
+                } catch (e) { }
+                const btn = document.getElementById(`soloBtn-${i}`);
+                if (btn) btn.dataset.active = '0';
+            });
+            document.querySelectorAll('.vehicle-panel').forEach(p => p.style.opacity = '1');
+        }
 
     function displaySolution(solution) {
         const statusDiv = document.getElementById('statusMessage');
@@ -703,15 +1052,19 @@
         const totalCost = asNumber(solution?.totalCost);
         const totalTime = asNumber(solution?.totalTime);
 
-        let statusClass = solution?.feasible ? 'success' : 'warning';
+        const overCapacity = !solution?.feasible && String(solution?.message ?? '').toLowerCase().includes('vượt tổng sức chứa');
+        let statusClass = solution?.feasible ? 'success' : (overCapacity ? 'error' : 'warning');
         statusDiv.innerHTML = `<div class="status ${statusClass}">${solution?.message ?? 'Không có thông báo kết quả'}</div>`;
 
         // Hiển thị tóm tắt
+        const solverMs = solution?._solverDurationMs ?? null;
         let summaryHtml = `
             <div class="summary">
                 <div class="summary-item">📊 Tổng quãng đường: ${asFixed(totalDistance)} km</div>
                 <div class="summary-item">💰 Tổng chi phí: ${Math.round(totalCost).toLocaleString('vi-VN')} VNĐ</div>
                 <div class="summary-item">⏱️ Tổng thời gian: ${formatTimeDisplay(totalTime)}</div>
+                ${solution?._objectiveMode ? `<div class="summary-item">🎯 Chế độ tối ưu: ${solution._objectiveMode}</div>` : ''}
+                ${solverMs ? `<div class="summary-item">⚙️ Thời gian xử lý thuật toán: ${solverMs} ms</div>` : ''}
                 <div class="summary-item">📦 Tuyến đường: ${routes.length}</div>
             </div>
         `;
@@ -800,7 +1153,22 @@
                     fillColor: colors[vehicleIdx % colors.length],
                     fillOpacity: 1,
                     weight: 2
-                }).addTo(routeLayers);
+                }).addTo(routeLayers).bindPopup(`<strong>${route?.vehicleName ?? 'Xe ' + (vehicleIdx+1)}</strong>`);
+
+                marker.on('click', () => {
+                    // show current nearest stop info when clicking the vehicle marker
+                    const state = vehicleStates[vehicleIdx];
+                    if (!state) return;
+                    const approxStopIndex = Math.round((state.currentIndex / Math.max(1, (state.coords.length - 1))) * Math.max(1, state.stopPositions.length - 1));
+                    if (approxStopIndex <= 0 || approxStopIndex >= state.stopPositions.length - 1) {
+                        marker.setPopupContent(`<strong>${route?.vehicleName ?? 'Xe'}</strong><br>Depot`);
+                    } else {
+                        const delIdx = route.deliveryIds[approxStopIndex - 1];
+                        const d = deliveries[delIdx];
+                        marker.setPopupContent(`<strong>${route?.vehicleName ?? 'Xe'}</strong><br>Đang tới: ${d?.address ?? ('Đơn '+(delIdx+1))}`);
+                    }
+                    marker.openPopup();
+                });
 
                 vehicleStates[vehicleIdx] = {
                     polyline: poly,
@@ -813,6 +1181,12 @@
                     route: route
                 };
                 createVehiclePanel(route, vehicleIdx);
+                // initialize slider max when geometry available
+                const s = document.getElementById(`v${vehicleIdx}-slider`);
+                if (s) {
+                    s.max = Math.max(0, (geometryToDraw.length || 1) - 1);
+                    s.value = 0;
+                }
             })();
 
             routePromises.push(routePromise);
@@ -831,6 +1205,87 @@
     // ===== VEHICLE TRACKING HELPERS =====
     let routePolylines = [];
     let vehicleStates = [];
+
+    // ===== EXPORT HELPERS =====
+    function downloadFile(data, filename, mime) {
+        const blob = new Blob([data], { type: mime });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+    }
+
+    function buildCsv(solution) {
+        const rows = [];
+        rows.push(['vehicle', 'deliveryIds', 'distance_km', 'time_minutes', 'weight_kg', 'capacity_kg', 'cost']);
+        const routes = Array.isArray(solution?.routes) ? solution.routes : [];
+        routes.forEach(r => {
+            const vehicle = r.vehicleName || '';
+            const ids = (r.deliveryIds ?? []).map(i => i + 1).join('|');
+            const distance = asFixed(r.totalDistance);
+            const time = Math.round(asNumber(r.totalTime));
+            const weight = asFixed(r.totalWeight);
+            const cap = asNumber(r.capacity);
+            const cost = Math.round(asNumber(r.totalCost));
+            rows.push([vehicle, ids, distance, time, weight, cap, cost]);
+        });
+        return rows.map(r => r.map(c => {
+            if (c == null) return '';
+            const s = String(c).replace(/"/g, '""');
+            return '"' + s + '"';
+        }).join(',')).join('\n');
+    }
+
+    function exportSolution(solution) {
+        if (!solution) { showStatus('Không có kết quả để xuất', 'warning'); return; }
+        try {
+            // Build compact JSON without geometry/steps to keep file small
+            const compact = {
+                summary: {
+                    totalDistance: solution.totalDistance,
+                    totalCost: solution.totalCost,
+                    totalTime: solution.totalTime,
+                    feasible: solution.feasible,
+                    message: solution.message,
+                    objectiveMode: solution._objectiveMode ?? getSelectedObjectiveMode(),
+                    solverDurationMs: solution._solverDurationMs ?? null,
+                    vehicleCount: (solution.routes || []).length,
+                    deliveryCount: (deliveries || []).length
+                },
+                routes: (solution.routes || []).map(r => ({
+                    vehicleName: r.vehicleName,
+                    deliveryIds: r.deliveryIds,
+                    totalDistance: r.totalDistance,
+                    totalTime: r.totalTime,
+                    totalWeight: r.totalWeight,
+                    capacity: r.capacity,
+                    totalCost: r.totalCost
+                }))
+            };
+
+            const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+            const jsonName = `vrp-solution-compact-${timestamp}.json`;
+            downloadFile(JSON.stringify(compact, null, 2), jsonName, 'application/json');
+
+            // CSV summary (route-level) remains useful
+            const csv = buildCsv(solution);
+            const csvName = `vrp-summary-${timestamp}.csv`;
+            downloadFile(csv, csvName, 'text/csv');
+
+            showStatus('Đã xuất kết quả tóm tắt (JSON compact + CSV).', 'success');
+        } catch (e) {
+            console.error('Export error', e);
+            showStatus('Lỗi khi xuất kết quả: ' + e.message, 'error');
+        }
+    }
+
+    function exportCurrentSolution() {
+        exportSolution(window.lastSolution);
+    }
 
     function clearVehicleTracking() {
         try {
@@ -856,6 +1311,19 @@
         const header = document.createElement('div');
         header.className = 'route-header';
         header.innerText = `🚗 ${route?.vehicleName ?? 'Xe ' + (vehicleIdx + 1)}`;
+        header.style.cursor = 'pointer';
+        header.title = 'Nhấn để hiện riêng tuyến này';
+        header.onclick = () => {
+            const btn = document.getElementById(`soloBtn-${vehicleIdx}`);
+            const active = btn && btn.dataset.active === '1';
+            if (!active) showOnlyVehicle(vehicleIdx); else showAllVehicles();
+        };
+
+        const statusLine = document.createElement('div');
+        statusLine.className = 'route-detail';
+        statusLine.id = `v${vehicleIdx}-status`;
+        statusLine.style.marginTop = '6px';
+        statusLine.innerText = 'Tình trạng: chờ...';
 
         const controls = document.createElement('div');
         controls.className = 'vehicle-controls';
@@ -877,6 +1345,15 @@
         controls.appendChild(playBtn);
         controls.appendChild(nextBtn);
 
+        const soloBtn = document.createElement('button');
+        soloBtn.id = `soloBtn-${vehicleIdx}`;
+        soloBtn.innerText = 'Hiện Riêng';
+        soloBtn.onclick = () => {
+            const active = soloBtn.dataset.active === '1';
+            if (!active) showOnlyVehicle(vehicleIdx); else showAllVehicles();
+        };
+        controls.appendChild(soloBtn);
+
         const stopList = document.createElement('div');
         stopList.className = 'stop-list';
 
@@ -896,10 +1373,29 @@
         });
 
         panel.appendChild(header);
+        panel.appendChild(statusLine);
         panel.appendChild(controls);
+        // timeline slider
+        const slider = document.createElement('input');
+        slider.type = 'range';
+        slider.min = 0;
+        slider.max = 0;
+        slider.value = 0;
+        slider.style.width = '100%';
+        slider.id = `v${vehicleIdx}-slider`;
+        slider.oninput = () => {
+            const val = Number(slider.value);
+            const state = vehicleStates[vehicleIdx];
+            if (!state) return;
+            state.currentIndex = Math.min(Math.max(0, val), (state.coords?.length || 1) - 1);
+            if (state.marker && state.coords && state.coords[state.currentIndex]) state.marker.setLatLng(state.coords[state.currentIndex]);
+            updateVehicleHighlight(vehicleIdx);
+            updateVehicleStatus(vehicleIdx);
+        };
+        panel.appendChild(slider);
         panel.appendChild(stopList);
-        // Steps (turn-by-turn) from backend
-        if (Array.isArray(route?.steps) && route.steps.length > 0) {
+        // Steps (turn-by-turn) from backend - skip in stress mode to keep DOM light
+        if (!window.stressMode && Array.isArray(route?.steps) && route.steps.length > 0) {
             const stepsToggle = document.createElement('button');
             stepsToggle.innerText = 'Hiển thị bước rẽ';
             stepsToggle.style.marginTop = '6px';
@@ -944,6 +1440,9 @@
             map.panTo(coords[geomIndex]);
         }
         updateVehicleHighlight(vehicleIdx);
+        updateVehicleStatus(vehicleIdx);
+        const s = document.getElementById(`v${vehicleIdx}-slider`);
+        if (s) s.value = state.currentIndex;
     }
 
     function prevStep(vehicleIdx) {
@@ -977,6 +1476,10 @@
             state.marker.setLatLng(state.coords[state.currentIndex]);
             map.panTo(state.coords[state.currentIndex]);
             updateVehicleHighlight(vehicleIdx);
+            updateVehicleStatus(vehicleIdx);
+            // update slider if present
+            const s = document.getElementById(`v${vehicleIdx}-slider`);
+            if (s) s.value = state.currentIndex;
         }, 600);
     }
 
@@ -1005,11 +1508,42 @@
             if (!el) continue;
             if (i === approxStopIndex) el.classList.add('active'); else el.classList.remove('active');
         }
+        // also update status line
+        try { updateVehicleStatus(vehicleIdx); } catch (e) { }
+    }
+
+    function updateVehicleStatus(vehicleIdx) {
+        const state = vehicleStates[vehicleIdx];
+        if (!state) return;
+        const route = state.route || {};
+        const stops = state.stopPositions || [];
+        const approxStopIndex = Math.round((state.currentIndex / Math.max(1, (state.coords.length - 1))) * Math.max(1, stops.length - 1));
+        let statusText = '';
+        if (approxStopIndex <= 0 || approxStopIndex >= stops.length - 1) {
+            statusText = 'Tại Depot';
+        } else {
+            const delIdx = route.deliveryIds?.[approxStopIndex - 1];
+            const d = deliveries[delIdx];
+            statusText = `Đang tới: ${d?.address ?? ('Đơn ' + (delIdx+1))} (ID ${d?.id ?? delIdx})`;
+        }
+        const el = document.getElementById(`v${vehicleIdx}-status`);
+        if (el) el.innerText = `Tình trạng: ${statusText}`;
+
+        // update marker popup as well
+        if (state.marker) {
+            state.marker.setPopupContent(`<strong>${route?.vehicleName ?? 'Xe'}</strong><br>${statusText}`);
+        }
+        // highlight delivery in list when appropriate
+        if (approxStopIndex > 0 && approxStopIndex < stops.length - 1) {
+            const delIdx = route.deliveryIds?.[approxStopIndex - 1];
+            if (typeof delIdx === 'number') highlightDelivery(delIdx);
+        }
     }
 
     function reset() {
         vehicles = [];
         deliveries = [];
+        window.stressMode = false;
         updateVehicleList();
         updateDeliveryList();
         document.getElementById('statusMessage').innerHTML = '';
@@ -1023,6 +1557,16 @@
     initDepot();
     updateVehicleList();
     updateDeliveryList();
+    // wire compact view checkbox and export button
+    const compactEl = document.getElementById('compactViewCheckbox');
+    if (compactEl) {
+        compactEl.checked = false;
+        compactEl.addEventListener('change', (e) => toggleCompact(e.target.checked));
+    }
+    const exportBtnEl = document.getElementById('exportBtn'); if (exportBtnEl) exportBtnEl.disabled = true;
+
+    // wire scenario select load button
+    window.loadSelectedScenario = function() { const sel = document.getElementById('scenarioSelect'); if (!sel) return; const v = sel.value; if (v === 'sample') autoGenerateAndSolve(20,3); else if (v === 's2') autoScenario2AndCompare(); else if (v === 's3') autoScenario3StressTest(); };
 </script>
 
 </body>

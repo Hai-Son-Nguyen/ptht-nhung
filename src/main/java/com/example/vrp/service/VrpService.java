@@ -1,26 +1,39 @@
 package com.example.vrp.service;
 
-import com.example.vrp.model.Delivery;
-import com.example.vrp.model.Route;
-import com.example.vrp.model.Vehicle;
-import com.example.vrp.model.VrpRequest;
-import com.example.vrp.model.VrpSolution;
-import com.google.ortools.Loader;
-import com.google.ortools.constraintsolver.*;
-import org.springframework.stereotype.Service;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
-
+import java.io.IOException;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
-import java.util.*;
-import com.example.vrp.model.RouteStep;
-import com.example.vrp.model.Location;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.List;
+import java.util.Locale;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.stereotype.Service;
+
+import com.example.vrp.model.Delivery;
+import com.example.vrp.model.Location;
+import com.example.vrp.model.Route;
+import com.example.vrp.model.RouteStep;
+import com.example.vrp.model.Vehicle;
+import com.example.vrp.model.VrpRequest;
+import com.example.vrp.model.VrpSolution;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.google.ortools.Loader;
+import com.google.ortools.constraintsolver.Assignment;
+import com.google.ortools.constraintsolver.FirstSolutionStrategy;
+import com.google.ortools.constraintsolver.LocalSearchMetaheuristic;
+import com.google.ortools.constraintsolver.RoutingDimension;
+import com.google.ortools.constraintsolver.RoutingIndexManager;
+import com.google.ortools.constraintsolver.RoutingModel;
+import com.google.ortools.constraintsolver.RoutingSearchParameters;
+import com.google.ortools.constraintsolver.main;
 
 @Service
 public class VrpService {
@@ -48,6 +61,8 @@ public class VrpService {
         List<Delivery> deliveries = request.getDeliveries();
         double depotLat = request.getDepotLat();
         double depotLng = request.getDepotLng();
+        String objectiveMode = normalizeObjectiveMode(request.getObjectiveMode());
+        int timeLimitSeconds = normalizeTimeLimitSeconds(request.getTimeLimitSeconds());
 
         // Validation
         if (vehicles == null || vehicles.isEmpty() || deliveries == null || deliveries.isEmpty()) {
@@ -73,6 +88,23 @@ public class VrpService {
             deliveryWeights[i + 1] = (long) (deliveries.get(i).getWeight() * 1000); // Chuyển kg -> gram
         }
 
+        double totalDemandKg = 0;
+        for (long weight : deliveryWeights) {
+            totalDemandKg += weight / 1000.0;
+        }
+        double totalVehicleCapacityKg = 0;
+        double maxVehicleCapacityKg = 0;
+        for (Vehicle vehicle : vehicles) {
+            double capacityKg = Math.max(0.0, vehicle.getCapacity());
+            totalVehicleCapacityKg += capacityKg;
+            maxVehicleCapacityKg = Math.max(maxVehicleCapacityKg, capacityKg);
+        }
+
+        if (totalDemandKg > totalVehicleCapacityKg) {
+            VrpSolution overflowSolution = buildOverCapacitySolution(vehicles, totalDemandKg, totalVehicleCapacityKg);
+            return overflowSolution;
+        }
+
         // 3. Tạo mảng time window
         long[] timeWindowStarts = new long[numLocations];
         long[] timeWindowEnds = new long[numLocations];
@@ -93,23 +125,49 @@ public class VrpService {
         RoutingIndexManager manager = new RoutingIndexManager(numLocations, numVehicles, 0);
         RoutingModel routing = new RoutingModel(manager);
 
-        // 5. Đăng ký Transit Callback cho khoảng cách
-        final int transitCallbackIndex = routing.registerTransitCallback((long fromIndex, long toIndex) -> {
+        // 5. Đăng ký transit cost theo chế độ được chọn
+        for (int vehicleIdx = 0; vehicleIdx < numVehicles; vehicleIdx++) {
+            final Vehicle vehicle = vehicles.get(vehicleIdx);
+            final double vehicleCapacityKg = Math.max(1.0, vehicle.getCapacity());
+            final double maxCapacityKg = Math.max(1.0, maxVehicleCapacityKg);
+            final double baseFuelRate = Math.max(1.0, vehicle.getCostPerKm() > 0 ? vehicle.getCostPerKm() : 5000.0);
+
+            final int costCallbackIndex;
+            if (isDistanceObjective(objectiveMode)) {
+                costCallbackIndex = routing.registerTransitCallback((long fromIndex, long toIndex) -> {
+                    int fromNode = manager.indexToNode(fromIndex);
+                    int toNode = manager.indexToNode(toIndex);
+                    return distanceMatrix[fromNode][toNode];
+                });
+            } else {
+                // Fuel-based: xe nhỏ hơn hoặc đơn nặng hơn sẽ có chi phí lớn hơn, giúp ưu tiên xe tải lớn.
+                costCallbackIndex = routing.registerTransitCallback((long fromIndex, long toIndex) -> {
+                    int fromNode = manager.indexToNode(fromIndex);
+                    int toNode = manager.indexToNode(toIndex);
+
+                    double distanceKm = distanceMatrix[fromNode][toNode] / 1000.0;
+                    double nodeWeightKg = deliveryWeights[toNode] / 1000.0;
+
+                    double capacityPenalty = (maxCapacityKg / vehicleCapacityKg) * 0.25;
+                    double loadPenalty = (nodeWeightKg / vehicleCapacityKg) * 0.75;
+                    double fuelMultiplier = 1.0 + capacityPenalty + loadPenalty;
+
+                    long fuelCost = Math.round(distanceKm * baseFuelRate * fuelMultiplier);
+                    return Math.max(1L, fuelCost);
+                });
+            }
+
+            routing.setArcCostEvaluatorOfVehicle(costCallbackIndex, vehicleIdx);
+        }
+
+        // 6. Thêm Distance Dimension
+        final int distanceCallbackIndex = routing.registerTransitCallback((long fromIndex, long toIndex) -> {
             int fromNode = manager.indexToNode(fromIndex);
             int toNode = manager.indexToNode(toIndex);
             return distanceMatrix[fromNode][toNode];
         });
 
-        routing.setArcCostEvaluatorOfAllVehicles(transitCallbackIndex);
-
-        // 6. Thêm Distance Dimension
-        routing.addDimension(
-                transitCallbackIndex,
-                0,
-                50000000, // Max distance
-                true,
-                "Distance"
-        );
+        routing.addDimension(distanceCallbackIndex, 0, 50000000, true, "Distance");
         RoutingDimension distanceDimension = routing.getMutableDimension("Distance");
         distanceDimension.setGlobalSpanCostCoefficient(100);
 
@@ -128,6 +186,7 @@ public class VrpService {
                 "Time"
         );
         RoutingDimension timeDimension = routing.getMutableDimension("Time");
+        timeDimension.setGlobalSpanCostCoefficient(25);
 
         // Add time window constraint with validation and safe fallback to avoid OR-Tools failures
         final long MAX_DAY_MINUTES = 24 * 60;
@@ -189,7 +248,8 @@ public class VrpService {
         // Set capacity cho mỗi xe
         for (int i = 0; i < numVehicles; i++) {
             long vehicleCapacity = (long) (vehicles.get(i).getCapacity() * 1000);
-            capacityDimension.cumulVar(routing.start(i)).setMax(vehicleCapacity);
+            capacityDimension.cumulVar(routing.start(i)).setRange(0, 0);
+            capacityDimension.cumulVar(routing.end(i)).setMax(vehicleCapacity);
         }
 
         // 9. Thiết lập tham số tìm kiếm với ưu tiên cost optimization
@@ -202,7 +262,7 @@ public class VrpService {
                                 LocalSearchMetaheuristic.Value.GUIDED_LOCAL_SEARCH)
                         .setTimeLimit(
                                 com.google.protobuf.Duration.newBuilder()
-                                        .setSeconds(10)
+                        .setSeconds(timeLimitSeconds)
                                         .build())
                         .build();
 
@@ -211,7 +271,7 @@ public class VrpService {
 
         // 11. Tổng hợp kết quả
         return buildSolution(solution, routing, manager, vehicles, deliveries,
-            distanceMatrix, timeMatrix, deliveryWeights, serviceTimes, depotLat, depotLng);
+            distanceMatrix, timeMatrix, deliveryWeights, serviceTimes, depotLat, depotLng, objectiveMode);
     }
 
     /**
@@ -260,10 +320,10 @@ public class VrpService {
                         }
                     }
 
-                    return new RouteMetrics(distanceMatrix, timeMatrix, "OSRM");
+                    return new RouteMetrics(distanceMatrix, timeMatrix);
                 }
             }
-        } catch (Exception ignored) {
+        } catch (IOException | InterruptedException ignored) {
             // Fallback bên dưới
         }
 
@@ -297,7 +357,7 @@ public class VrpService {
             }
         }
 
-        return new RouteMetrics(distanceMatrix, timeMatrix, "HaversineFallback");
+        return new RouteMetrics(distanceMatrix, timeMatrix);
     }
 
     /**
@@ -324,7 +384,8 @@ public class VrpService {
                                       RoutingIndexManager manager, List<Vehicle> vehicles,
                                       List<Delivery> deliveries, long[][] distanceMatrix,
                                       long[][] timeMatrix, long[] deliveryWeights,
-                                      long[] serviceTimes, double depotLat, double depotLng) {
+                                      long[] serviceTimes, double depotLat, double depotLng,
+                                      String objectiveMode) {
         VrpSolution vrpSolution = new VrpSolution();
         List<Route> routes = new ArrayList<>();
 
@@ -341,9 +402,6 @@ public class VrpService {
         long totalTime = 0;
         int numDelivered = 0;
 
-        RoutingDimension distanceDimension = routing.getMutableDimension("Distance");
-        RoutingDimension timeDimension = routing.getMutableDimension("Time");
-
         for (int vehicleIdx = 0; vehicleIdx < vehicles.size(); vehicleIdx++) {
             Vehicle vehicle = vehicles.get(vehicleIdx);
             List<Integer> deliveryIds = new ArrayList<>();
@@ -352,9 +410,6 @@ public class VrpService {
             long routeWeight = 0;
 
             long index = routing.start(vehicleIdx);
-            // prepare route coordinates for directions
-            List<double[]> routeCoordsLatLng = new ArrayList<>();
-            routeCoordsLatLng.add(new double[]{depotLat, depotLng});
             while (!routing.isEnd(index)) {
                 int nodeIndex = manager.indexToNode(index);
                 
@@ -363,9 +418,6 @@ public class VrpService {
                     deliveryIds.add(deliveryIdx);
                     routeWeight += deliveryWeights[nodeIndex];
                     numDelivered++;
-                    // append delivery coords
-                    Delivery d = deliveries.get(deliveryIdx);
-                    routeCoordsLatLng.add(new double[]{d.getLat(), d.getLng()});
                 }
 
                 long nextIndex = solution.value(routing.nextVar(index));
@@ -375,14 +427,13 @@ public class VrpService {
                 index = nextIndex;
             }
 
-            // add depot at end
-            routeCoordsLatLng.add(new double[]{depotLat, depotLng});
-
             // Chỉ thêm route nếu xe có giao hàng
             if (!deliveryIds.isEmpty()) {
                 double routeDistanceKm = routeDistance / 1000.0;
                 double routeWeightKg = routeWeight / 1000.0;
-                double routeCost = (routeDistanceKm * vehicle.getCostPerKm()) + vehicle.getFixedCost();
+                double routeCost = isDistanceObjective(objectiveMode)
+                    ? estimateDistanceRouteCost(vehicle, routeDistanceKm)
+                    : estimateFuelRouteCost(vehicle, deliveryIds, deliveries, distanceMatrix, deliveryWeights);
 
                 Route route = new Route(
                     vehicleIdx,
@@ -444,15 +495,109 @@ public class VrpService {
         return vrpSolution;
     }
 
+    private VrpSolution buildOverCapacitySolution(List<Vehicle> vehicles,
+                                                  double totalDemandKg, double totalVehicleCapacityKg) {
+        VrpSolution solution = new VrpSolution();
+        solution.setRoutes(Collections.emptyList());
+        solution.setTotalDistance(0);
+        solution.setTotalWeight(totalDemandKg);
+        solution.setTotalCost(0);
+        solution.setTotalTime(0);
+        solution.setFeasible(false);
+
+        if (vehicles == null || vehicles.isEmpty()) {
+            solution.setMessage("Không có xe để kiểm tra tải trọng.");
+            return solution;
+        }
+
+        List<Vehicle> sortedVehicles = new ArrayList<>(vehicles);
+        sortedVehicles.sort(Comparator.comparingDouble(Vehicle::getCapacity).reversed());
+
+        StringBuilder message = new StringBuilder();
+        message.append("Tổng tải đơn hàng ")
+                .append(String.format(Locale.US, "%.1f", totalDemandKg))
+                .append(" kg vượt tổng sức chứa đội xe ")
+                .append(String.format(Locale.US, "%.1f", totalVehicleCapacityKg))
+                .append(" kg. ");
+        message.append("Nếu vẫn phải giao hết toàn bộ đơn, các xe sau sẽ phải vượt tải theo phân bổ tỷ lệ sức chứa: ");
+
+        for (Vehicle vehicle : sortedVehicles) {
+            double vehicleCapacityKg = Math.max(1.0, vehicle.getCapacity());
+            double proportionalLoad = totalDemandKg * (vehicleCapacityKg / Math.max(1.0, totalVehicleCapacityKg));
+            double overloadKg = Math.max(0.0, proportionalLoad - vehicleCapacityKg);
+            message.append(vehicle.getName() != null ? vehicle.getName() : ("Xe " + (vehicle.getId() + 1)))
+                    .append(" (+")
+                    .append(String.format(Locale.US, "%.1f", overloadKg))
+                    .append(" kg); ");
+        }
+
+        solution.setMessage(message.toString());
+        return solution;
+    }
+
+    private boolean isDistanceObjective(String objectiveMode) {
+        return "distance".equalsIgnoreCase(normalizeObjectiveMode(objectiveMode));
+    }
+
+    private String normalizeObjectiveMode(String objectiveMode) {
+        if (objectiveMode == null || objectiveMode.isBlank()) {
+            return "fuel";
+        }
+        String normalized = objectiveMode.trim().toLowerCase(Locale.ROOT);
+        return "distance".equals(normalized) ? "distance" : "fuel";
+    }
+
+    private int normalizeTimeLimitSeconds(Integer requestedSeconds) {
+        if (requestedSeconds == null || requestedSeconds <= 0) {
+            return 10;
+        }
+        return Math.min(Math.max(requestedSeconds, 1), 120);
+    }
+
+    private double estimateDistanceRouteCost(Vehicle vehicle, double routeDistanceKm) {
+        double costPerKm = Math.max(1.0, vehicle.getCostPerKm() > 0 ? vehicle.getCostPerKm() : 5000.0);
+        return routeDistanceKm * costPerKm + Math.max(0.0, vehicle.getFixedCost());
+    }
+
+    private double estimateFuelRouteCost(Vehicle vehicle, List<Integer> deliveryIds, List<Delivery> deliveries,
+                                         long[][] distanceMatrix, long[] deliveryWeights) {
+        double capacityKg = Math.max(1.0, vehicle.getCapacity());
+        double baseFuelRate = Math.max(1.0, vehicle.getCostPerKm() > 0 ? vehicle.getCostPerKm() : 5000.0);
+        double maxCapacityKg = Math.max(1.0, capacityKg);
+
+        double remainingLoadKg = 0.0;
+        for (Integer deliveryIdx : deliveryIds) {
+            remainingLoadKg += deliveryWeights[deliveryIdx + 1] / 1000.0;
+        }
+
+        double totalCost = 0.0;
+        int prevNode = 0;
+        for (Integer deliveryIdx : deliveryIds) {
+            int node = deliveryIdx + 1;
+            double distanceKm = distanceMatrix[prevNode][node] / 1000.0;
+            double capacityPenalty = (maxCapacityKg / capacityKg) * 0.20;
+            double loadPenalty = (remainingLoadKg / capacityKg) * 0.80;
+            double multiplier = 1.0 + capacityPenalty + loadPenalty;
+            totalCost += distanceKm * baseFuelRate * multiplier;
+            remainingLoadKg -= deliveries.get(deliveryIdx).getWeight();
+            prevNode = node;
+        }
+
+        double distanceKm = distanceMatrix[prevNode][0] / 1000.0;
+        double multiplier = 1.0 + (maxCapacityKg / capacityKg) * 0.20;
+        totalCost += distanceKm * baseFuelRate * multiplier;
+
+        // Nếu routeDistanceKm được tính từ solver và bị khác do làm tròn, vẫn giữ estimate theo tuyến thực tế.
+        return totalCost;
+    }
+
     private static class RouteMetrics {
         private final long[][] distanceMatrix;
         private final long[][] timeMatrix;
-        private final String source;
 
-        private RouteMetrics(long[][] distanceMatrix, long[][] timeMatrix, String source) {
+        private RouteMetrics(long[][] distanceMatrix, long[][] timeMatrix) {
             this.distanceMatrix = distanceMatrix;
             this.timeMatrix = timeMatrix;
-            this.source = source;
         }
     }
 
@@ -521,7 +666,7 @@ public class VrpService {
             }
 
             return new DirectionsResult(geom, steps);
-        } catch (Exception ex) {
+        } catch (IOException | InterruptedException ex) {
             logger.warn("Error fetching directions from OSRM: {}", ex.toString());
             return null;
         }
